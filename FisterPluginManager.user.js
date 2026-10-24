@@ -15,8 +15,8 @@
 // @connect      raw.githubusercontent.com
 // @connect      gist.githubusercontent.com
 // @connect      *
-// @updateURL    https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/FisterPluginManager.user.js
-// @downloadURL  https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/FisterPluginManager.user.js
+// @updateURL    https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/FisterPluginManager.user.js
+// @downloadURL  https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/FisterPluginManager.user.js
 // @noframes
 // ==/UserScript==
 (function(){
@@ -24,7 +24,7 @@
 const W=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
 if(new URL(location.href).pathname!=='/'||W.__fpm)return;
 const VERSION='1.0.0';
-const REPO='https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/';
+const REPO='https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/';
 const CATALOG_URL=REPO+'catalog.json';
 const PARSER={sha256:'8df29c13797bab293a47ce2d334bdb4dd147b6f6a3830f0c7c94efa99e290b8d',url:REPO+'dist/fpm-parser-1.0.0-8df29c1379.json'};
 const SAFE=new URL(location.href).searchParams.get('plugins')==='off';
@@ -189,7 +189,7 @@ const savePrefs=()=>{try{localStorage.setItem(PREFS_KEY,JSON.stringify(prefs));}
 //   // @author      you
 //   // @description What it does
 //   // ==/FisterPlugin==
-// and uses the `fister` object (see the README in the fister-plugins repo).
+// and uses the `fister` object (see the README in the fister-plugin-manager repo).
 function parseMeta(code){const m=String(code).match(/\/\/\s*==FisterPlugin==([\s\S]*?)\/\/\s*==\/FisterPlugin==/);if(!m)throw Error('This is not a Fister plugin (the // ==FisterPlugin== header is missing).');
  const meta={};for(const line of m[1].split('\n')){const k=line.match(/^\s*\/\/\s*@([\w-]+)\s+(.+?)\s*$/);if(k)meta[k[1].toLowerCase()]=k[2];}
  if(!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(meta.id||''))throw Error('The plugin needs an @id made of lowercase letters, numbers and dashes.');
@@ -423,7 +423,7 @@ function render(ui){const root=h('div',{class:'fpm'});
    grid.append(card(ui,meta,{flags:[have?h('span',{class:'fpm-flag '+(upd?'upd':'have')},upd?'update':'installed'):null],size:p.size||null,
     foot:[h('span',{class:'fpm-gap'}),p.homepage?h('a',{href:p.homepage,target:'_blank',rel:'noopener'},'More info'):null,(!have||upd)?button(upd?'Update':'Install',()=>run('Downloading '+p.name+'…',async()=>{const code=await httpGet(p.url),m=parseMeta(code);if(m.id!==p.id)throw Error('The catalog entry and the plugin file disagree about its id.');askInstall(code,{type:'catalog',url:p.url});})):null]}));}
   root.append(items.length?grid:h('div',{class:'fpm-empty'},catalog?'No plugins match.':ui.busy?'Loading…':'Could not load the catalog.'));
-  root.append(h('p',{class:'fpm-note'},'From github.com/jaxonb423/fister-plugins. Want yours listed? Open a pull request there.'));}
+  root.append(h('p',{class:'fpm-note'},'From github.com/jaxonb423/fister-plugin-manager. Want yours listed? Open a pull request there.'));}
  else{const recs=[...plugins.values()].sort((a,b)=>a.meta.name.localeCompare(b.meta.name)).filter(r=>matches(ui.query,r.meta));
   for(const r of recs){const run_=running.get(r.id),err=run_?.error;
    const sw=h('button',{type:'button',class:'fpm-switch',role:'switch','aria-checked':String(!!r.enabled),'aria-label':(r.enabled?'Turn off ':'Turn on ')+r.meta.name,disabled:SAFE,onclick:()=>setEnabled(r.id,!r.enabled)});

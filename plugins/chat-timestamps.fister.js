@@ -5,8 +5,8 @@
 // @author      jaxonb423
 // @description Puts the time in front of each new chat message.
 // @tags        chat
-// @icon        https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/art/chat-timestamps-icon.svg
-// @banner      https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/art/chat-timestamps-banner.svg
+// @icon        https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/art/chat-timestamps-icon.svg
+// @banner      https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/art/chat-timestamps-banner.svg
 // ==/FisterPlugin==
 
 fister.settings.define({

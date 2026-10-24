@@ -11,9 +11,9 @@
         "hud",
         "stats"
       ],
-      "url": "https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/ko-counter.fister.js",
-      "icon": "https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/art/ko-counter-icon.svg",
-      "banner": "https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/art/ko-counter-banner.svg",
+      "url": "https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/ko-counter.fister.js",
+      "icon": "https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/art/ko-counter-icon.svg",
+      "banner": "https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/art/ko-counter-banner.svg",
       "size": "2.0 KB"
     },
     {
@@ -26,9 +26,9 @@
         "audio",
         "combat"
       ],
-      "url": "https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/hit-sounds.fister.js",
-      "icon": "https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/art/hit-sounds-icon.svg",
-      "banner": "https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/art/hit-sounds-banner.svg",
+      "url": "https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/hit-sounds.fister.js",
+      "icon": "https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/art/hit-sounds-icon.svg",
+      "banner": "https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/art/hit-sounds-banner.svg",
       "size": "2.1 KB"
     },
     {
@@ -40,9 +40,9 @@
       "tags": [
         "chat"
       ],
-      "url": "https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/chat-timestamps.fister.js",
-      "icon": "https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/art/chat-timestamps-icon.svg",
-      "banner": "https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/art/chat-timestamps-banner.svg",
+      "url": "https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/chat-timestamps.fister.js",
+      "icon": "https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/art/chat-timestamps-icon.svg",
+      "banner": "https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/art/chat-timestamps-banner.svg",
       "size": "1.3 KB"
     }
   ]

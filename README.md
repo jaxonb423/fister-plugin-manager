@@ -7,7 +7,7 @@ It works on its own, or alongside [FisterQoL](https://github.com/jaxonb423/Fiste
 ## Install
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/).
-2. Open **[FisterPluginManager.user.js](https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/FisterPluginManager.user.js)** and click Install.
+2. Open **[FisterPluginManager.user.js](https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/FisterPluginManager.user.js)** and click Install.
 3. Open fister.fun → Settings → **Plugins**. (**Ctrl+Shift+P** also opens the manager, anywhere.)
 
 The first time a plugin is downloaded from a new site, Tampermonkey asks to allow it. Choose **Always allow**.

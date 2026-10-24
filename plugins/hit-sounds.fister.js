@@ -5,8 +5,8 @@
 // @author      jaxonb423
 // @description Plays a short sound when you land a hit, parry or KO, so you can hear it even when the screen is busy.
 // @tags        audio combat
-// @icon        https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/art/hit-sounds-icon.svg
-// @banner      https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/art/hit-sounds-banner.svg
+// @icon        https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/art/hit-sounds-icon.svg
+// @banner      https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/art/hit-sounds-banner.svg
 // ==/FisterPlugin==
 
 fister.settings.define({
