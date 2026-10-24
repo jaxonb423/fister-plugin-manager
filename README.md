@@ -109,7 +109,9 @@ Catalog cards show how many times each plugin has been installed through the Plu
 
 ## How it hooks into the game
 
-Like FisterQoL, the manager adds a few small hooks to the game's code as it loads (combat events, round events, the Plugins tab and access to the game scene). With FisterQoL installed, QoL loads the game and adds these hooks for it; on its own, the manager loads the game itself. If a game update moves something, the affected hooks switch off and the manager says which. If the Plugins tab itself can't be added, Ctrl+Shift+P still opens it.
+Nothing is hooked until you have a plugin that can use game events. With no plugins, or only userscripts like FisterQoL, the game loads exactly as it would without the manager, and the Plugins tab is added to Settings directly. After you install your first plugin, reload once to turn the game events on; turning off your last plugin turns them off again at the next reload. The Plugins tab only builds itself when you open it, and download counts only update while it's on screen.
+
+When hooks are on, like FisterQoL, the manager adds a few small hooks to the game's code as it loads (combat events, round events, the Plugins tab and access to the game scene). With FisterQoL installed, QoL loads the game and adds these hooks for it; on its own, the manager loads the game itself. If a game update moves something, the affected hooks switch off and the manager says which. If the Plugins tab itself can't be added, Ctrl+Shift+P still opens it.
 
 ## Licenses
 
