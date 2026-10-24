@@ -2,6 +2,25 @@
   "version": 1,
   "plugins": [
     {
+      "id": "fisterqol",
+      "name": "Fister QoL — Browser",
+      "version": "2.3.7",
+      "author": "jaxonb423",
+      "kind": "userscript",
+      "description": "The big quality-of-life mod: HUD, crosshair, camera, audio, performance, clips and a clip editor tab, music, outfits, pets, themes, a desktop buddy and Bad Translator. Its settings live in the QoL tab.",
+      "tags": [
+        "qol",
+        "hud",
+        "themes",
+        "clips"
+      ],
+      "url": "https://raw.githubusercontent.com/jaxonb423/fisterqol/main/FisterQoL.user.js",
+      "homepage": "https://github.com/jaxonb423/fisterqol",
+      "icon": "https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/art/fisterqol-icon.svg",
+      "banner": "https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/art/fisterqol-banner.svg",
+      "size": "41 KB"
+    },
+    {
       "id": "ko-counter",
       "name": "KO Counter",
       "version": "1.0.0",

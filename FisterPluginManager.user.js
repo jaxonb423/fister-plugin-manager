@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fister Plugin Manager
 // @namespace    fister-plugins.local
-// @version      1.0.0
+// @version      1.1.0
 // @description  A mod manager for Fister: browse, install, turn on/off, configure and update plugins from its own Plugins tab in Settings. Works on its own or alongside FisterQoL.
 // @match        https://fister.fun/*
 // @match        https://www.fister.fun/*
@@ -14,6 +14,8 @@
 // @grant        unsafeWindow
 // @connect      raw.githubusercontent.com
 // @connect      gist.githubusercontent.com
+// @connect      abacus.jasoncameron.dev
+// @connect      translate.googleapis.com
 // @connect      *
 // @updateURL    https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/FisterPluginManager.user.js
 // @downloadURL  https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/FisterPluginManager.user.js
@@ -23,7 +25,7 @@
 'use strict';
 const W=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
 if(new URL(location.href).pathname!=='/'||W.__fpm)return;
-const VERSION='1.0.0';
+const VERSION='1.1.0';
 const REPO='https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/';
 const CATALOG_URL=REPO+'catalog.json';
 const PARSER={sha256:'8df29c13797bab293a47ce2d334bdb4dd147b6f6a3830f0c7c94efa99e290b8d',url:REPO+'dist/fpm-parser-1.0.0-8df29c1379.json'};
@@ -166,6 +168,30 @@ const LOADER=(()=>{
     if(!promise)promise=load().catch(e=>{console.error('[Fister Plugins] loading failed',e);Object.defineProperty(W,'__fisterRuntimeBootPromise',{configurable:true,writable:true,value:undefined});throw e;});return promise;},
    set(v){promise=v==null?null:v;}});return true;}
  return {claim};})();
+
+// ======================================================================
+// Userscript plugins (like FisterQoL) start here, before the game loads, so they can patch it.
+// Their code is kept in localStorage because IndexedDB can't be read this early.
+// ======================================================================
+const EARLY_KEY='fpm-early-v1';
+const earlyStore={read(){try{const v=JSON.parse(localStorage.getItem(EARLY_KEY)||'{}');return v&&typeof v==='object'?v:{};}catch{return {};}},
+ write(v){try{localStorage.setItem(EARLY_KEY,JSON.stringify(v));return true;}catch(e){console.warn('[Fister Plugins] could not keep a userscript plugin for the next start',e);return false;}},
+ put(rec){const v=this.read();if(rec.enabled&&rec.meta.kind==='userscript')v[rec.id]={code:rec.code,version:rec.meta.version,name:rec.meta.name};else delete v[rec.id];return this.write(v);},
+ drop(id){const v=this.read();delete v[id];this.write(v);}};
+const earlyRan=new Map();   // id -> 'started' | error text
+function runEarly(id,entry){const grants={GM_xmlhttpRequest:typeof GM_xmlhttpRequest==='function'?GM_xmlhttpRequest:undefined,GM_addElement:typeof GM_addElement==='function'?GM_addElement:undefined,
+  GM_info:{script:{name:entry.name,version:entry.version},scriptHandler:'Fister Plugin Manager',version:VERSION}};
+ // a one-time handoff of the Tampermonkey functions to this one script, removed straight after it starts
+ const P='__fpmEarly:'+id;let taken=false;const drop=()=>{if(W[P]===hand)delete W[P];};const hand={take(){if(taken)return null;taken=true;drop();return grants;}};
+ Object.defineProperty(W,P,{configurable:true,value:hand});setTimeout(drop,15000);
+ earlyRan.set(id,'did not start (a syntax error or a blocked script)');
+ // at the very start the page may not have an <html> element yet; inject as soon as it exists
+ const go=()=>{try{addScript('(function(){var __h=window['+JSON.stringify(P)+'],__g=__h&&__h.take();if(!__g)return;try{(function(GM_xmlhttpRequest,GM_addElement,GM_info,unsafeWindow){\n'+entry.code+
+   '\n}).call(window,__g.GM_xmlhttpRequest,__g.GM_addElement,__g.GM_info,window);window.__fpmEarlyDone&&window.__fpmEarlyDone('+JSON.stringify(id)+');}catch(e){window.__fpmEarlyDone&&window.__fpmEarlyDone('+JSON.stringify(id)+',e);}})();\n//# sourceURL=fister-plugin:'+id+'.user.js');}
+ catch(e){drop();earlyRan.set(id,String(e?.message||e));}};
+ if(document.documentElement)go();else{const mo=new MutationObserver(()=>{if(document.documentElement){mo.disconnect();go();}});mo.observe(document,{childList:true});}}
+Object.defineProperty(W,'__fpmEarlyDone',{configurable:true,value:(id,e)=>{earlyRan.set(id,e?String(e?.message||e):'started');if(e)console.error('[Fister Plugins] '+id+' crashed while starting:',e);}});
+if(!SAFE)for(const [id,entry] of Object.entries(earlyStore.read()))if(entry&&typeof entry.code==='string')runEarly(id,entry);
 if(!SAFE)LOADER.claim();
 
 // ======================================================================
@@ -190,8 +216,18 @@ const savePrefs=()=>{try{localStorage.setItem(PREFS_KEY,JSON.stringify(prefs));}
 //   // @description What it does
 //   // ==/FisterPlugin==
 // and uses the `fister` object (see the README in the fister-plugin-manager repo).
-function parseMeta(code){const m=String(code).match(/\/\/\s*==FisterPlugin==([\s\S]*?)\/\/\s*==\/FisterPlugin==/);if(!m)throw Error('This is not a Fister plugin (the // ==FisterPlugin== header is missing).');
- const meta={};for(const line of m[1].split('\n')){const k=line.match(/^\s*\/\/\s*@([\w-]+)\s+(.+?)\s*$/);if(k)meta[k[1].toLowerCase()]=k[2];}
+const US_GRANTS=new Set(['GM_xmlhttpRequest','GM.xmlHttpRequest','GM_addElement','GM.addElement','GM_info','unsafeWindow','none']);
+function parseMeta(code){code=String(code);const m=code.match(/\/\/\s*==FisterPlugin==([\s\S]*?)\/\/\s*==\/FisterPlugin==/),u=!m&&code.match(/\/\/\s*==UserScript==([\s\S]*?)\/\/\s*==\/UserScript==/);
+ if(!m&&!u)throw Error('This is not a Fister plugin or a userscript (the // ==FisterPlugin== or // ==UserScript== header is missing).');
+ const meta={},multi={};for(const line of (m||u)[1].split('\n')){const k=line.match(/^\s*\/\/\s*@([\w.:-]+)\s+(.+?)\s*$/);if(!k)continue;const key=k[1].toLowerCase();(multi[key]=multi[key]||[]).push(k[2]);if(!(key in meta))meta[key]=k[2];}
+ if(u){// a Tampermonkey-style userscript: it starts before the game loads, with the few Tampermonkey functions the manager can hand on
+  meta.kind='userscript';meta.id=meta['fister-id']||String(meta.name||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40);
+  meta.tags=meta['fister-tags']||meta.tags;meta.banner=meta['fister-banner']||meta.banner;meta.icon=meta['fister-icon']||meta.icon||meta.iconurl;
+  if(!(multi.match||[]).concat(multi.include||[]).some(x=>/fister\.fun/i.test(x)))throw Error('This userscript is not made for fister.fun (no @match for it).');
+  if(multi.require||multi.resource)throw Error('This userscript uses @require or @resource, which plugins can\'t load. Install it in Tampermonkey instead.');
+  const bad=(multi.grant||[]).filter(g=>!US_GRANTS.has(g));if(bad.length)throw Error('This userscript needs '+bad.join(', ')+', which the Plugin Manager can\'t give it. Install it in Tampermonkey instead.');
+  meta.grants=(multi.grant||[]).join(' ');}
+ else meta.kind='plugin';
  if(!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(meta.id||''))throw Error('The plugin needs an @id made of lowercase letters, numbers and dashes.');
  if(!meta.name)throw Error('The plugin needs a @name.');if(!/^\d+(\.\d+){0,3}$/.test(meta.version||''))throw Error('The plugin needs a @version like 1.0.0.');
  for(const k of ['name','author','description','tags'])if(meta[k])meta[k]=meta[k].slice(0,k==='description'?300:k==='tags'?200:60);
@@ -200,18 +236,23 @@ const newer=(a,b)=>{const x=String(a).split('.').map(Number),y=String(b).split('
 const plugins=new Map();          // id -> record {id, meta, code, enabled, source:{type,url}, installedAt, updatedAt, update?}
 const running=new Map();          // id -> {cleanups:[], api, error, logs}
 const listeners=new Set();const changed=()=>{for(const f of listeners)try{f();}catch{}};
-async function loadStore(){try{const rows=await idb('plugins','readonly',s=>s.getAll());for(const r of rows||[])if(r&&r.id)plugins.set(r.id,r);}catch(e){console.warn('[Fister Plugins] storage',e);}}
+async function loadStore(){try{const rows=await idb('plugins','readonly',s=>s.getAll());for(const r of rows||[])if(r&&r.id){if(r.meta&&!r.meta.kind)r.meta.kind='plugin';plugins.set(r.id,r);}}catch(e){console.warn('[Fister Plugins] storage',e);}
+ const early=earlyStore.read();for(const r of plugins.values())if(r.meta.kind==='userscript'&&r.enabled&&early[r.id]?.code!==r.code)earlyStore.put(r);}
 const saveRecord=r=>idb('plugins','readwrite',s=>s.put(r,r.id)).catch(e=>console.warn('[Fister Plugins] save',e));
 async function install(code,source){const meta=parseMeta(code),old=plugins.get(meta.id);
  if(old&&running.has(meta.id))stop(meta.id);
  const rec={id:meta.id,meta,code,enabled:old?old.enabled:true,source,installedAt:old?.installedAt||Date.now(),updatedAt:Date.now()};plugins.set(meta.id,rec);await saveRecord(rec);
- if(rec.enabled&&!SAFE)start(meta.id);changed();return rec;}
-async function remove(id){stop(id);plugins.delete(id);await idb('plugins','readwrite',s=>s.delete(id)).catch(()=>{});try{localStorage.removeItem('fpm-settings:'+id);}catch{}changed();}
-async function setEnabled(id,on){const r=plugins.get(id);if(!r)return;r.enabled=!!on;await saveRecord(r);if(on&&!SAFE)start(id);else stop(id);changed();}
+ if(old&&old.meta.kind==='userscript'&&meta.kind!=='userscript')earlyStore.drop(meta.id);
+ if(meta.kind==='userscript'){if(!earlyStore.put(rec))throw Error('There is not enough room in this browser\'s storage to keep '+meta.name+'.');rec.restart=true;}
+ else if(rec.enabled&&!SAFE)start(meta.id);
+ if(!old&&source?.type==='catalog')counter.hit(meta.id);changed();return rec;}
+async function remove(id){stop(id);earlyStore.drop(id);plugins.delete(id);await idb('plugins','readwrite',s=>s.delete(id)).catch(()=>{});try{localStorage.removeItem('fpm-settings:'+id);}catch{}changed();}
+async function setEnabled(id,on){const r=plugins.get(id);if(!r)return;r.enabled=!!on;await saveRecord(r);
+ if(r.meta.kind==='userscript'){earlyStore.put(r);r.restart=true;}else if(on&&!SAFE)start(id);else stop(id);changed();}
 
 // The running side: each plugin gets its own `fister` object; everything it adds through it is undone on stop.
 const pending=new Map();
-function start(id){const r=plugins.get(id);if(!r||running.has(id))return;
+function start(id){const r=plugins.get(id);if(!r||running.has(id)||r.meta.kind==='userscript')return;
  const run={cleanups:[],error:null,logs:[],settingsSchema:{},onSettings:new Set()};running.set(id,run);run.api=makeApi(r,run);
  pending.set(id,run);
  addScript('window.__fpm.define('+JSON.stringify(id)+',function(fister){"use strict";\n'+r.code+'\n});\n//# sourceURL=fister-plugin:'+id+'.js');
@@ -261,6 +302,30 @@ function watchChat(){if(chatMo)return;const scan=()=>{const box=document.getElem
  if(!scan()){const t=setInterval(()=>{if(scan())clearInterval(t);},1000);}}
 
 // updates for plugins that came from a link or the catalog
+
+// ======================================================================
+// Download counters (abacus.jasoncameron.dev, a free public counting service).
+// One count per device per plugin, when it's installed from the catalog. Live while the Plugins tab is open.
+// ======================================================================
+const counter=(()=>{const NS='fister-plugin-manager',BASE='https://abacus.jasoncameron.dev',values=new Map(),streams=new Map();let pollTimer=0,watching=new Set();
+ const key=id=>('dl-'+id).slice(0,64);
+ const get=url=>new Promise(res=>{if(typeof GM_xmlhttpRequest!=='function'){fetch(url).then(r=>r.json().then(j=>res({status:r.status,json:j}))).catch(()=>res(null));return;}
+  GM_xmlhttpRequest({method:'GET',url,timeout:15000,anonymous:true,onload:r=>{let j=null;try{j=JSON.parse(r.responseText);}catch{}res({status:r.status,json:j});},onerror:()=>res(null),ontimeout:()=>res(null)});});
+ const fmt=n=>n<1000?String(n):n<1e6?(n/1000).toFixed(n<1e4?1:0).replace(/\.0$/,'')+'k':(n/1e6).toFixed(1).replace(/\.0$/,'')+'M';
+ const label=n=>n==null?'… downloads':fmt(n)+(n===1?' download':' downloads');
+ function set(id,v){if(typeof v!=='number'||!(v>=0))return;const old=values.get(id);values.set(id,v);if(old===v)return;
+  for(const el of document.querySelectorAll('[data-fpm-count]'))if(el.dataset.fpmCount===id){el.textContent=label(v);el.title=v.toLocaleString()+' installs through the Plugin Manager';if(old!=null&&v>old){el.classList.remove('bump');void el.offsetWidth;el.classList.add('bump');}}}
+ async function refresh(id){const r=await get(BASE+'/get/'+NS+'/'+key(id));if(!r)return;if(r.status===404)set(id,0);else if(r.json&&typeof r.json.value==='number')set(id,r.json.value);}
+ function stream(id){if(streams.has(id)||typeof EventSource!=='function')return;let es;try{es=new EventSource(BASE+'/stream/'+NS+'/'+key(id));}catch{streams.set(id,null);return;}
+  streams.set(id,es);es.onmessage=e=>{try{set(id,JSON.parse(e.data).value);}catch{}};es.onerror=()=>{es.close();streams.set(id,null);};}
+ function watch(ids){watching=new Set(ids);for(const [id,es] of streams)if(!watching.has(id)){es?.close();streams.delete(id);}
+  for(const id of watching){if(!values.has(id))refresh(id);stream(id);}
+  clearInterval(pollTimer);if(watching.size)pollTimer=setInterval(()=>{if(!document.querySelector('[data-fpm-count]')){watch([]);return;}if(document.hidden)return;
+   for(const id of watching)if(!streams.get(id))refresh(id);},20000);}
+ async function hit(id){const flag='fpm-counted:'+id;try{if(localStorage.getItem(flag))return;localStorage.setItem(flag,'1');}catch{}
+  const r=await get(BASE+'/hit/'+NS+'/'+key(id));if(r?.json&&typeof r.json.value==='number')set(id,r.json.value);}
+ const badge=id=>{const v=values.get(id);return h('span',{class:'fpm-count','data-fpm-count':id,title:v!=null?v.toLocaleString()+' installs through the Plugin Manager':''},label(v));};
+ return {watch,hit,badge,values};})();
 let catalog=null,catalogAt=0;
 async function getCatalog(force){if(!force&&catalog&&Date.now()-catalogAt<3600e3)return catalog;const data=JSON.parse(await httpGet(CATALOG_URL));
  catalog=(Array.isArray(data.plugins)?data.plugins:[]).filter(p=>p&&typeof p.id==='string'&&typeof p.url==='string');catalogAt=Date.now();return catalog;}
@@ -304,6 +369,11 @@ const CSS=`
 .fpm-icon b{font:900 20px Tahoma,Arial,sans-serif;color:#fff}
 .fpm-name{font-size:16px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fpm-sub{font-size:12px;opacity:.75;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fpm-count{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:700;color:#1b5e20;border-radius:4px;padding:0 3px;transition:background .6s}
+.fpm-count::before{content:"";width:9px;height:10px;background:currentColor;clip-path:polygon(32% 0,68% 0,68% 50%,100% 50%,50% 100%,0 50%,32% 50%)}
+.fpm-count.bump{animation:fpm-bump 1.2s}
+@keyframes fpm-bump{0%{background:#ffe066;transform:scale(1.15)}100%{background:transparent;transform:none}}
+.fpm-flag.us{background:#6a1b9a}.fpm-flag.rs{background:#e65100}
 .fpm-desc{font-size:13px;line-height:1.35}
 .fpm-err{font-size:12px;color:#b00000;font-weight:700;overflow-wrap:anywhere}
 .fpm-tags{display:flex;flex-wrap:wrap;gap:5px}
@@ -413,36 +483,42 @@ function render(ui){const root=h('div',{class:'fpm'});
   root.append(h('div',{class:'fpm-confirm',role:'alertdialog'},h('b',{},(old?'Update ':'Install ')+meta.name+' '+meta.version+'?'),h('div',{},meta.description||'No description.'),
    h('div',{class:'fpm-note'},'By '+(meta.author||'unknown')+' · '+sizeOf(code)+' · from '+(source.type==='file'?'the file '+(source.name||''):source.type==='catalog'?'the plugin catalog':source.type==='local'?'your editor':source.url)),
    source.type!=='catalog'&&source.type!=='local'?h('div',{class:'fpm-note warn'},'Not from the catalog. Plugins can do anything the game page can; only install it if you trust whoever made it.'):null,
+   meta.kind==='userscript'?h('div',{class:'fpm-note'},'This is a userscript. It starts before the game loads (from the next reload)'+(meta.grants&&meta.grants!=='none'?' and can use '+meta.grants.split(' ').join(', '):'')+'. If you also have it in Tampermonkey, turn that copy off.'):null,
    old?h('div',{class:'fpm-note'},'Replaces version '+old.meta.version+'.'):null,
-   h('div',{class:'fpm-row'},button(old?'Update':'Install',()=>run('Installing…',async()=>{await install(code,source);ui.confirm=null;ui.message=meta.name+(SAFE?' is installed.':' is installed and on.');})),button('Cancel',()=>{ui.confirm=null;render(ui);}))));}
+   h('div',{class:'fpm-row'},button(old?'Update':'Install',()=>run('Installing…',async()=>{await install(code,source);ui.confirm=null;ui.message=meta.name+(meta.kind==='userscript'?' is installed. Reload the game to start it.':SAFE?' is installed.':' is installed and on.');})),button('Cancel',()=>{ui.confirm=null;render(ui);}))));}
  // cards
  const grid=h('div',{class:'fpm-grid'});
  if(ui.view==='catalog'){root.append(h('div',{class:'fpm-heading'},button('‹ Installed',()=>{ui.view='installed';render(ui);}),'Plugin catalog'));
   const items=(catalog||[]).filter(p=>matches(ui.query,p));
   for(const p of items){const have=plugins.get(p.id),upd=have&&newer(p.version,have.meta.version),meta={...p,tags:(p.tags||[]).join(' ')};
-   grid.append(card(ui,meta,{flags:[have?h('span',{class:'fpm-flag '+(upd?'upd':'have')},upd?'update':'installed'):null],size:p.size||null,
+   grid.append(card(ui,meta,{flags:[have?h('span',{class:'fpm-flag '+(upd?'upd':'have')},upd?'update':'installed'):null],size:p.size||null,count:true,
     foot:[h('span',{class:'fpm-gap'}),p.homepage?h('a',{href:p.homepage,target:'_blank',rel:'noopener'},'More info'):null,(!have||upd)?button(upd?'Update':'Install',()=>run('Downloading '+p.name+'…',async()=>{const code=await httpGet(p.url),m=parseMeta(code);if(m.id!==p.id)throw Error('The catalog entry and the plugin file disagree about its id.');askInstall(code,{type:'catalog',url:p.url});})):null]}));}
   root.append(items.length?grid:h('div',{class:'fpm-empty'},catalog?'No plugins match.':ui.busy?'Loading…':'Could not load the catalog.'));
   root.append(h('p',{class:'fpm-note'},'From github.com/jaxonb423/fister-plugin-manager. Want yours listed? Open a pull request there.'));}
  else{const recs=[...plugins.values()].sort((a,b)=>a.meta.name.localeCompare(b.meta.name)).filter(r=>matches(ui.query,r.meta));
-  for(const r of recs){const run_=running.get(r.id),err=run_?.error;
+  const inCatalog=new Set((catalog||[]).map(p=>p.id));
+  for(const r of recs){const run_=running.get(r.id),us=r.meta.kind==='userscript',early=earlyRan.get(r.id),err=run_?.error||(us&&r.enabled&&early&&early!=='started'?early:null);
    const sw=h('button',{type:'button',class:'fpm-switch',role:'switch','aria-checked':String(!!r.enabled),'aria-label':(r.enabled?'Turn off ':'Turn on ')+r.meta.name,disabled:SAFE,onclick:()=>setEnabled(r.id,!r.enabled)});
-   grid.append(card(ui,r.meta,{off:!r.enabled,code:r.code,error:err,
-    flags:[err?h('span',{class:'fpm-flag err',title:err},'crashed'):null,r.update?h('span',{class:'fpm-flag upd'},'v'+r.update.version+' available'):null],
+   grid.append(card(ui,r.meta,{off:!r.enabled,code:r.code,error:err,count:r.source?.type==='catalog'||inCatalog.has(r.id),
+    flags:[err?h('span',{class:'fpm-flag err',title:err},'crashed'):null,r.update?h('span',{class:'fpm-flag upd'},'v'+r.update.version+' available'):null,
+     us?h('span',{class:'fpm-flag us',title:'Starts before the game loads'},'userscript'):null,r.restart?h('span',{class:'fpm-flag rs'},'reload to apply'):null],
     foot:[sw,h('span',{class:'fpm-gap'}),r.update?button('Update',()=>run('Updating…',async()=>{await install(r.update.code,r.source);ui.message=r.meta.name+' updated.';})):null,
-     button('Edit',()=>{ui.sheet={id:r.id,tab:run_&&Object.keys(run_.settingsSchema).length?'settings':'code',draft:r.code,status:''};render(ui);}),
+     r.restart?button('Reload',()=>location.reload()):null,
+     button('Edit',()=>{ui.sheet={id:r.id,tab:!us&&run_&&Object.keys(run_.settingsSchema).length?'settings':'code',draft:r.code,status:''};render(ui);}),
      button('Remove',e=>{if(e.currentTarget.dataset.sure==='1')remove(r.id);else{const b=e.currentTarget;b.dataset.sure='1';b.textContent='Sure?';setTimeout(()=>{if(b.isConnected){b.dataset.sure='';b.textContent='Remove';}},4000);}},{class:'fister-react95-button win95-btn fpm-danger'})]}));}
   root.append(recs.length?grid:h('div',{class:'fpm-empty'},plugins.size?'No plugins match.':'No plugins yet. Press "+ Add plugin" to browse the catalog.'));
   const auto=h('input',{type:'checkbox',checked:prefs.autoUpdate,id:'fpm-auto',onchange:()=>{prefs.autoUpdate=auto.checked;savePrefs();}});
   root.append(h('label',{class:'fpm-toggle',for:'fpm-auto'},auto,'Update plugins automatically (checks every 6 hours)'));}
  root.append(h('p',{class:'fpm-note'},'Plugins are code that runs in the game page. Only install ones from people you trust. Start with ?plugins=off if one breaks the game. · Fister Plugin Manager '+VERSION+(game.hookedBy?' · game hooks added by '+game.hookedBy:'')+' · Ctrl+Shift+P'));
  if(ui.sheet)root.append(sheet(ui));
- const scroll=ui.host.scrollTop;ui.host.replaceChildren(root);ui.host.scrollTop=scroll;}
+ const scroll=ui.host.scrollTop;ui.host.replaceChildren(root);ui.host.scrollTop=scroll;
+ counter.watch([...new Set([...document.querySelectorAll('[data-fpm-count]')].map(e=>e.dataset.fpmCount))]);}
 function card(ui,meta,o){const tags=tagsOf(meta);
  return h('article',{class:'fpm-card'+(o.off?' off':'')},banner(meta,o.flags||[]),
   h('div',{class:'fpm-body'},
    h('div',{class:'fpm-title'},icon(meta),h('div',{style:'min-width:0'},h('div',{class:'fpm-name',title:meta.name},meta.name),
-    h('div',{class:'fpm-sub'},'v'+meta.version+(meta.author?' · by '+meta.author:'')+' · plugin'+(o.code?' · '+sizeOf(o.code):o.size?' · '+o.size:'')))),
+    h('div',{class:'fpm-sub'},'v'+meta.version+(meta.author?' · by '+meta.author:'')+' · '+(meta.kind==='userscript'?'userscript':'plugin')+(o.code?' · '+sizeOf(o.code):o.size?' · '+o.size:'')),
+    o.count?counter.badge(meta.id):null)),
    meta.description?h('div',{class:'fpm-desc'},meta.description):null,o.error?h('div',{class:'fpm-err'},'Error: '+o.error):null,
    tags.length?h('div',{class:'fpm-tags'},...tags.map(t=>h('button',{type:'button',class:'fpm-tag',onclick:()=>{ui.query='#'+t;render(ui);}},'#'+t))):null,
    h('div',{class:'fpm-foot'},...o.foot)));}
@@ -452,10 +528,10 @@ function sheet(ui){const s=ui.sheet,r=s.id?plugins.get(s.id):null,run_=r?running
  const box=h('div',{class:'fpm-sheet',role:'dialog','aria-label':r?'Edit '+r.meta.name:'New plugin'},
   h('div',{class:'fpm-heading'},button('‹ Back',()=>{ui.sheet=null;render(ui);}),r?r.meta.name:'New plugin'),
   h('div',{class:'fpm-tabs'},r?tab('settings','Settings'):null,tab('code','Code'),r?tab('log','Log'):null));
- if(s.tab==='settings'&&r)box.append(hasSettings?settingsForm(run_):h('p',{class:'fpm-note'},r.enabled?'This plugin has no settings.':'Turn the plugin on to change its settings.'));
- if(s.tab==='log'&&r)box.append(h('div',{class:'fpm-log'},run_?.logs.join('\n')||'Nothing logged yet.'),r.enabled&&!SAFE?h('div',{class:'fpm-row'},button('Restart plugin',()=>{stop(r.id);start(r.id);render(ui);})):null);
+ if(s.tab==='settings'&&r)box.append(r.meta.kind==='userscript'?h('p',{class:'fpm-note'},'This userscript keeps its own settings (for FisterQoL, the QoL tab in Settings).'):hasSettings?settingsForm(run_):h('p',{class:'fpm-note'},r.enabled?'This plugin has no settings.':'Turn the plugin on to change its settings.'));
+ if(s.tab==='log'&&r)box.append(h('div',{class:'fpm-log'},r.meta.kind==='userscript'?(earlyRan.has(r.id)?'This visit: '+earlyRan.get(r.id)+'.':r.enabled?'Not started yet: it starts when the game is reloaded.':'Off.')+'\nUserscripts write to the browser console (F12).':run_?.logs.join('\n')||'Nothing logged yet.'),r.enabled&&!SAFE&&r.meta.kind!=='userscript'?h('div',{class:'fpm-row'},button('Restart plugin',()=>{stop(r.id);start(r.id);render(ui);})):null);
  if(s.tab==='code'){const ta=h('textarea',{spellcheck:false,value:s.draft,'aria-label':'Plugin code',oninput:()=>{s.draft=ta.value;},onkeydown:e=>{if(e.key==='Tab'){e.preventDefault();const a=ta.selectionStart;ta.setRangeText('  ',a,ta.selectionEnd,'end');s.draft=ta.value;}e.stopPropagation();}});
-  box.append(ta,h('div',{class:'fpm-row'},button(r?'Save and restart':'Install',async()=>{try{const meta=parseMeta(s.draft);if(r&&meta.id!==r.id)throw Error('Keep the @id the same, or make a new plugin.');
+  box.append(ta,h('div',{class:'fpm-row'},button(r?(r.meta.kind==='userscript'?'Save (applies on reload)':'Save and restart'):'Install',async()=>{try{const meta=parseMeta(s.draft);if(r&&meta.id!==r.id)throw Error('Keep the @id the same, or make a new plugin.');
      await install(s.draft,r&&r.source?.type!=='local'?{...r.source,edited:true}:{type:'local'});s.status='Saved.';ui.sheet={...s,id:meta.id};render(ui);}catch(e){s.status=String(e?.message||e);render(ui);}}),
    r?button('Undo my changes',()=>{s.draft=r.code;s.status='';render(ui);}):null,
    h('span',{class:'fpm-note',role:'status'},s.status||'')),

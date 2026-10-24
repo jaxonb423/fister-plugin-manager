@@ -94,6 +94,19 @@ See [`plugins/`](plugins/) for three small examples: a KO counter, hit sounds an
 - **By link:** put the file somewhere public (a GitHub repo or gist) and share the **Raw** link. Players paste it into *+ Add plugin → Install from a link*, and the plugin updates itself when you raise `@version` at that address.
 - **In the catalog:** open a pull request adding your file under `plugins/` (pictures under `plugins/art/`) and an entry to [`catalog.json`](catalog.json), with the same `icon`, `banner` and `tags`.
 
+## Userscripts as plugins (FisterQoL)
+
+The manager can also install ordinary Tampermonkey-style userscripts made for fister.fun, such as **FisterQoL** (it's in the catalog). They start before the game loads, like they would in Tampermonkey, so turning one on, off or updating it takes effect when you reload the game.
+
+- A userscript can use `GM_xmlhttpRequest`, `GM_addElement`, `GM_info` and `unsafeWindow`. Ones that need `@require`, `@resource` or other `GM_` functions are refused; install those in Tampermonkey.
+- Optional extra header lines for the card: `@fister-id`, `@fister-tags`, `@fister-icon`, `@fister-banner` (Tampermonkey ignores them).
+- Don't run the same script both ways. FisterQoL notices and only starts once, but turn the Tampermonkey copy off anyway.
+- Updates come from the address it was installed from (for FisterQoL, its own repo).
+
+## Download counts
+
+Catalog cards show how many times each plugin has been installed through the Plugin Manager, and the numbers update live while the tab is open. Each device counts once per plugin, when it's installed from the catalog. Installs straight into Tampermonkey aren't counted. The counts are kept by [Abacus](https://github.com/JasonLovesDoggo/abacus), a free public counting service, under the namespace `fister-plugin-manager`; the manager only sends which plugin was installed.
+
 ## How it hooks into the game
 
 Like FisterQoL, the manager adds a few small hooks to the game's code as it loads (combat events, round events, the Plugins tab and access to the game scene). With FisterQoL installed, QoL loads the game and adds these hooks for it; on its own, the manager loads the game itself. If a game update moves something, the affected hooks switch off and the manager says which. If the Plugins tab itself can't be added, Ctrl+Shift+P still opens it.
