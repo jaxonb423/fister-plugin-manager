@@ -102,6 +102,7 @@ The manager can also install ordinary Tampermonkey-style userscripts made for fi
 - Optional extra header lines for the card: `@fister-id`, `@fister-tags`, `@fister-icon`, `@fister-banner` (Tampermonkey ignores them).
 - Don't run the same script both ways. FisterQoL notices and only starts once, but turn the Tampermonkey copy off anyway.
 - Updates come from the address it was installed from (for FisterQoL, its own repo).
+- FisterQoL's **Early hook** is built in: when FisterQoL is installed here, the manager holds the game's start until QoL has hooked in, so you don't need the separate "FisterQoL — Early hook" script. If QoL fails to start, the game starts normally after a few seconds.
 
 ## Download counts
 

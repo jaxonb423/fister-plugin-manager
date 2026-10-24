@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fister Plugin Manager
 // @namespace    fister-plugins.local
-// @version      1.1.1
+// @version      1.1.2
 // @description  A mod manager for Fister: browse, install, turn on/off, configure and update plugins from its own Plugins tab in Settings. Works on its own or alongside FisterQoL.
 // @match        https://fister.fun/*
 // @match        https://www.fister.fun/*
@@ -25,7 +25,7 @@
 'use strict';
 const W=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
 if(new URL(location.href).pathname!=='/'||W.__fpm)return;
-const VERSION='1.1.1';
+const VERSION='1.1.2';
 const REPO='https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/';
 const CATALOG_URL=REPO+'catalog.json';
 const PARSER={sha256:'8df29c13797bab293a47ce2d334bdb4dd147b6f6a3830f0c7c94efa99e290b8d',url:REPO+'dist/fpm-parser-1.0.0-8df29c1379.json'};
@@ -183,6 +183,22 @@ const earlyStore={read(){try{const v=JSON.parse(localStorage.getItem(EARLY_KEY)|
  write(v){try{localStorage.setItem(EARLY_KEY,JSON.stringify(v));return true;}catch(e){console.warn('[Fister Plugins] could not keep a userscript plugin for the next start',e);return false;}},
  put(rec){const v=this.read();if(rec.enabled&&rec.meta.kind==='userscript')v[rec.id]={code:rec.code,version:rec.meta.version,name:rec.meta.name};else delete v[rec.id];return this.write(v);},
  drop(id){const v=this.read();delete v[id];this.write(v);}};
+
+// FisterQoL's "Early hook": hold the game's start until QoL (started below) attaches, so the game can't
+// start before QoL has hooked in. If QoL doesn't attach in time, or crashes, the game starts normally.
+function qolEarlyHook(){if(W.__fisterQolEarlyHook||W.__fisterQolBrowserLoading||Object.getOwnPropertyDescriptor(W,'__fisterRuntimeBootPromise'))return;  // QoL from Tampermonkey is already in charge
+ let boot=null,hold=null,release=null,done=false;
+ const native=()=>{if(done)return;done=true;delete W.__fisterQolEarlyHook;
+  Object.defineProperty(W,'__fisterRuntimeBootPromise',{configurable:true,writable:true,value:undefined});
+  const load=W.__fisterLoadRuntime;release?.(typeof load==='function'?load('qol-early-hook'):undefined);};
+ const timer=setTimeout(native,10000);
+ Object.defineProperty(W,'__fisterQolEarlyHook',{configurable:true,value:{version:VERSION,by:'Fister Plugin Manager',
+  attach(b){if(done||!b||typeof b.get!=='function')return;done=true;clearTimeout(timer);boot=b;
+   Object.defineProperty(W,'__fisterRuntimeBootPromise',{configurable:true,get:b.get,set:b.set});if(release)release(b.get());},
+  giveUp:native}});
+ Object.defineProperty(W,'__fisterRuntimeBootPromise',{configurable:true,
+  get(){if(boot)return boot.get();if(done)return undefined;return hold||(hold=new Promise(r=>{release=r;}));},
+  set(v){if(boot)boot.set(v);else if(v==null){hold=null;release=null;}}});}
 const earlyRan=new Map();   // id -> 'started' | error text
 function runEarly(id,entry){const grants={GM_xmlhttpRequest:typeof GM_xmlhttpRequest==='function'?GM_xmlhttpRequest:undefined,GM_addElement:typeof GM_addElement==='function'?GM_addElement:undefined,
   GM_info:{script:{name:entry.name,version:entry.version},scriptHandler:'Fister Plugin Manager',version:VERSION}};
@@ -193,10 +209,12 @@ function runEarly(id,entry){const grants={GM_xmlhttpRequest:typeof GM_xmlhttpReq
  // at the very start the page may not have an <html> element yet; inject as soon as it exists
  const go=()=>{try{addScript('(function(){var __h=window['+JSON.stringify(P)+'],__g=__h&&__h.take();if(!__g)return;try{(function(GM_xmlhttpRequest,GM_addElement,GM_info,unsafeWindow){\n'+entry.code+
    '\n}).call(window,__g.GM_xmlhttpRequest,__g.GM_addElement,__g.GM_info,window);window.__fpmEarlyDone&&window.__fpmEarlyDone('+JSON.stringify(id)+');}catch(e){window.__fpmEarlyDone&&window.__fpmEarlyDone('+JSON.stringify(id)+',e);}})();\n//# sourceURL=fister-plugin:'+id+'.user.js');}
- catch(e){drop();earlyRan.set(id,String(e?.message||e));}};
+ catch(e){drop();earlyRan.set(id,String(e?.message||e));if(entry.code.includes('__fisterQolEarlyHook'))W.__fisterQolEarlyHook?.giveUp?.();}};
  if(document.documentElement)go();else{const mo=new MutationObserver(()=>{if(document.documentElement){mo.disconnect();go();}});mo.observe(document,{childList:true});}}
-Object.defineProperty(W,'__fpmEarlyDone',{configurable:true,value:(id,e)=>{earlyRan.set(id,e?String(e?.message||e):'started');if(e)console.error('[Fister Plugins] '+id+' crashed while starting:',e);}});
-if(!SAFE)for(const [id,entry] of Object.entries(earlyStore.read()))if(entry&&typeof entry.code==='string')runEarly(id,entry);
+Object.defineProperty(W,'__fpmEarlyDone',{configurable:true,value:(id,e)=>{earlyRan.set(id,e?String(e?.message||e):'started');if(e){console.error('[Fister Plugins] '+id+' crashed while starting:',e);if(/__fisterQolEarlyHook/.test(earlyStore.read()[id]?.code||''))W.__fisterQolEarlyHook?.giveUp?.();}}});
+if(!SAFE){const entries=Object.entries(earlyStore.read()).filter(([,e])=>e&&typeof e.code==='string');
+ if(entries.some(([,e])=>e.code.includes('__fisterQolEarlyHook')))qolEarlyHook();
+ for(const [id,entry] of entries)runEarly(id,entry);}
 if(game.hooksOn)LOADER.claim();
 
 // ======================================================================
