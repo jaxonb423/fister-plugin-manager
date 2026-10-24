@@ -194,7 +194,8 @@ function parseMeta(code){const m=String(code).match(/\/\/\s*==FisterPlugin==([\s
  const meta={};for(const line of m[1].split('\n')){const k=line.match(/^\s*\/\/\s*@([\w-]+)\s+(.+?)\s*$/);if(k)meta[k[1].toLowerCase()]=k[2];}
  if(!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(meta.id||''))throw Error('The plugin needs an @id made of lowercase letters, numbers and dashes.');
  if(!meta.name)throw Error('The plugin needs a @name.');if(!/^\d+(\.\d+){0,3}$/.test(meta.version||''))throw Error('The plugin needs a @version like 1.0.0.');
- for(const k of ['name','author','description'])if(meta[k])meta[k]=meta[k].slice(0,k==='description'?300:60);return meta;}
+ for(const k of ['name','author','description','tags'])if(meta[k])meta[k]=meta[k].slice(0,k==='description'?300:k==='tags'?200:60);
+ for(const k of ['icon','banner','homepage'])if(meta[k]&&!/^(https:\/\/|data:image\/)/i.test(meta[k]))delete meta[k];return meta;}
 const newer=(a,b)=>{const x=String(a).split('.').map(Number),y=String(b).split('.').map(Number);for(let i=0;i<Math.max(x.length,y.length);i++){const d=(x[i]||0)-(y[i]||0);if(d)return d>0;}return false;};
 const plugins=new Map();          // id -> record {id, meta, code, enabled, source:{type,url}, installedAt, updatedAt, update?}
 const running=new Map();          // id -> {cleanups:[], api, error, logs}
@@ -276,96 +277,190 @@ function toast(text,ms,from){const show=()=>{let box=document.getElementById('fp
   if(from){const b=document.createElement('b');b.textContent=from+': ';t.append(b);}t.append(text);box.append(t);setTimeout(()=>t.remove(),ms);};
  if(document.body)show();else document.addEventListener('DOMContentLoaded',show,{once:true});}
 const CSS=`
-.fpm{display:flex;flex-direction:column;gap:10px;font-size:13px}
-.fpm .fpm-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-.fpm .fpm-card{border:1px solid #808080;padding:8px 10px;background:#ffffff80;display:flex;flex-direction:column;gap:6px}
-.fpm .fpm-card.off{opacity:.7}
-.fpm .fpm-head{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
-.fpm .fpm-head b{font-size:14px}
-.fpm .fpm-small{font-size:12px;opacity:.8}
-.fpm .fpm-badge{font-size:11px;padding:0 6px;border:1px solid currentColor;border-radius:8px}
-.fpm .fpm-badge.err{color:#b00000}.fpm .fpm-badge.upd{color:#006000}
-.fpm .fpm-grow{flex:1 1 auto}
-.fpm .fpm-toggle{display:inline-flex;gap:6px;align-items:center;margin:0;cursor:pointer}
-.fpm .fpm-toggle input{margin:0}
-.fpm .fpm-form input[type=checkbox]{justify-self:start;width:auto;margin:0}
-.fpm .fpm-form input[type=range]{min-width:140px}
-.fpm .fpm-form{display:grid;grid-template-columns:minmax(120px,max-content) 1fr;gap:6px 10px;align-items:center}
-.fpm .fpm-log{max-height:120px;overflow:auto;font:11px Consolas,monospace;background:#0001;padding:4px;white-space:pre-wrap}
-.fpm .fpm-confirm{border:2px solid #b00000;padding:10px;background:#fff6f6;display:flex;flex-direction:column;gap:6px}
-.fpm input[type=search],.fpm input[type=url]{flex:1 1 220px;min-width:0}
-#fpm-window{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(720px,94vw);max-height:86vh;z-index:100004;display:flex;flex-direction:column}
-#fpm-window .fpm-body{overflow:auto;padding:10px}
+.fpm{display:flex;flex-direction:column;gap:10px;font-size:13px;position:relative}
+.fpm-top{display:flex;gap:8px;align-items:stretch;position:relative}
+.fpm-top .fpm-search{flex:1 1 auto;min-width:0;padding:8px 10px;font-size:14px;box-sizing:border-box}
+.fpm-top .fpm-add{white-space:nowrap;padding:0 14px}
+.fpm-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:5;display:flex;flex-direction:column;min-width:220px;background:#c0c0c0;border:2px outset #eee;box-shadow:2px 2px 0 #0005}
+.fpm-menu button{text-align:left;border:0!important;box-shadow:none!important;padding:7px 12px!important;background:transparent}
+.fpm-menu button:hover{background:#000080!important;color:#fff!important}
+.fpm-note{font-size:12px;margin:0;opacity:.85}
+.fpm-note.warn{color:#b00000;font-weight:700;opacity:1}
+.fpm-msg{font-weight:700;margin:0}
+.fpm-heading{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px}
+.fpm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px}
+.fpm-card{display:flex;flex-direction:column;background:#d4d4d4;border:2px solid #9a9a9a;min-width:0}
+.fpm-card.off .fpm-banner{filter:grayscale(.75) brightness(.92)}
+.fpm-banner{position:relative;height:132px;overflow:hidden;background:#555;display:grid;place-items:center}
+.fpm-banner img{width:100%;height:100%;object-fit:cover;display:block}
+.fpm-banner .fpm-letter{font:900 64px/1 Tahoma,Arial,sans-serif;color:#fff8;text-shadow:0 2px 0 #0003}
+.fpm-flags{position:absolute;left:6px;top:6px;display:flex;gap:4px;flex-wrap:wrap}
+.fpm-flag{font:700 11px Tahoma,Arial,sans-serif;padding:2px 7px;border-radius:9px;background:#000a;color:#fff}
+.fpm-flag.err{background:#c62828}.fpm-flag.upd{background:#2e7d32}.fpm-flag.have{background:#1565c0}
+.fpm-body{display:flex;flex-direction:column;gap:8px;padding:10px 12px 12px;flex:1 1 auto}
+.fpm-title{display:flex;gap:10px;align-items:center;min-width:0}
+.fpm-icon{width:40px;height:40px;flex:none;border-radius:8px;background:#fff;display:grid;place-items:center;overflow:hidden;border:1px solid #0002}
+.fpm-icon img{width:100%;height:100%;object-fit:cover}
+.fpm-icon b{font:900 20px Tahoma,Arial,sans-serif;color:#fff}
+.fpm-name{font-size:16px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fpm-sub{font-size:12px;opacity:.75;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fpm-desc{font-size:13px;line-height:1.35}
+.fpm-err{font-size:12px;color:#b00000;font-weight:700;overflow-wrap:anywhere}
+.fpm-tags{display:flex;flex-wrap:wrap;gap:5px}
+.fpm-tag{font:12px Tahoma,Arial,sans-serif;padding:2px 9px;border-radius:12px;border:1px solid #777;background:#e8e8e8;color:#333;cursor:pointer}
+.fpm-tag:hover{background:#fff}
+.fpm-foot{display:flex;align-items:center;gap:8px;margin-top:auto;padding-top:4px}
+.fpm-foot .fpm-gap{flex:1}
+.fpm-foot button{min-width:72px;padding:6px 12px}
+.fpm-danger{background:#d9433a!important;color:#fff!important;border-color:#f08a84 #8e211b #8e211b #f08a84!important}
+.fpm-switch{position:relative;width:46px;height:26px;flex:none;border-radius:13px;background:#8a8a8a;border:1px solid #666;cursor:pointer;padding:0!important;min-width:0!important;box-shadow:inset 0 1px 3px #0005!important}
+.fpm-switch::after{content:"";position:absolute;left:2px;top:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 2px #0006;transition:transform .15s}
+.fpm-switch[aria-checked=true]{background:#2e9e4f;border-color:#21773a}
+.fpm-switch[aria-checked=true]::after{transform:translateX(20px)}
+.fpm-switch:disabled{opacity:.5;cursor:default}
+.fpm-confirm{border:2px solid #b00000;padding:10px 12px;background:#fff6f6;color:#222;display:flex;flex-direction:column;gap:6px}
+.fpm-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.fpm-row input[type=url]{flex:1 1 260px;min-width:0;padding:6px 8px}
+.fpm-empty{padding:24px;text-align:center;opacity:.8;border:2px dashed #999}
+.fpm-sheet{position:absolute;inset:0;z-index:6;background:#c0c0c0;display:flex;flex-direction:column;gap:8px;padding:2px;min-height:420px}
+.fpm-sheet .fpm-tabs{display:flex;gap:4px}
+.fpm-sheet .fpm-tabs button[aria-pressed=true]{font-weight:700}
+.fpm-sheet textarea{width:100%;min-height:340px;box-sizing:border-box;font:12px/1.45 Consolas,"DejaVu Sans Mono",monospace;tab-size:2;white-space:pre;resize:vertical}
+.fpm-form{display:grid;grid-template-columns:minmax(120px,max-content) 1fr;gap:6px 10px;align-items:center}
+.fpm-toggle{display:inline-flex;gap:6px;align-items:center;margin:0;cursor:pointer}
+.fpm-form input[type=checkbox]{justify-self:start;width:auto;margin:0}
+.fpm-form input[type=range]{min-width:140px}
+.fpm-log{max-height:340px;overflow:auto;font:12px Consolas,monospace;background:#0001;padding:6px;white-space:pre-wrap}
+#fpm-window{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(940px,94vw);max-height:88vh;z-index:100004;display:flex;flex-direction:column}
+#fpm-window .fpm-body-host{overflow:auto;padding:10px}
 `;
 function css(){if(document.getElementById('fpm-style'))return;const s=document.createElement('style');s.id='fpm-style';s.textContent=CSS;(document.head||document.documentElement).append(s);}
 const h=(tag,props={},...kids)=>{const el=document.createElement(tag);for(const [k,v] of Object.entries(props||{})){if(v==null||v===false)continue;if(k==='class')el.className=v;else if(k.startsWith('on'))el.addEventListener(k.slice(2),v);else if(k in el&&k!=='list')el[k]=v;else el.setAttribute(k,v===true?'':v);}for(const c of kids.flat())if(c!=null&&c!==false)el.append(c);return el;};
 const button=(text,on,extra={})=>h('button',{type:'button',class:'fister-react95-button win95-btn',onclick:on,...extra},text);
+// Pictures from plugin headers are fetched through Tampermonkey and kept, so they show whatever the page allows.
+const images=new Map(),ready=new Map();
+function picture(url){if(!url)return Promise.resolve(null);if(/^data:image\//i.test(url))return Promise.resolve(url);if(!/^https:\/\//i.test(url))return Promise.resolve(null);
+ let p=images.get(url);if(p)return p;
+ p=(async()=>{let blob=await idb('cache','readonly',s=>s.get('img:'+url)).catch(()=>null);
+  if(!(blob instanceof Blob)){blob=await new Promise((res,rej)=>{if(typeof GM_xmlhttpRequest!=='function'){fetch(url).then(r=>r.ok?r.blob():null).then(res,rej);return;}
+    GM_xmlhttpRequest({method:'GET',url,responseType:'blob',timeout:20000,anonymous:true,onload:r=>res(r.status>=200&&r.status<300?r.response:null),onerror:()=>res(null),ontimeout:()=>res(null)});});
+   if(!(blob instanceof Blob)||blob.size>3*1024*1024)return null;
+   const type=/\.svg(\?|$)/i.test(url)?'image/svg+xml':blob.type&&blob.type.startsWith('image/')?blob.type:/\.png(\?|$)/i.test(url)?'image/png':/\.(jpe?g)(\?|$)/i.test(url)?'image/jpeg':/\.gif(\?|$)/i.test(url)?'image/gif':/\.webp(\?|$)/i.test(url)?'image/webp':'';
+   if(!type)return null;blob=new Blob([blob],{type});idb('cache','readwrite',s=>s.put(blob,'img:'+url)).catch(()=>{});}
+  const u=URL.createObjectURL(blob);ready.set(url,u);return u;})().catch(()=>null);images.set(url,p);return p;}
+const hue=s=>{let n=0;for(const c of String(s))n=(n*31+c.charCodeAt(0))>>>0;return n%360;};
+function banner(meta,flags){const box=h('div',{class:'fpm-banner',style:'background:linear-gradient(135deg,hsl('+hue(meta.id)+' 55% 52%),hsl('+((hue(meta.id)+50)%360)+' 60% 38%))'},
+  h('span',{class:'fpm-letter'},(meta.name||'?').trim().charAt(0).toUpperCase()),h('div',{class:'fpm-flags'},...flags));
+ const put=u=>{if(u){box.querySelector('.fpm-letter')?.remove();box.prepend(h('img',{src:u,alt:'',decoding:'sync'}));}};
+ const now=ready.get(meta.banner)||(/^data:/.test(meta.banner||'')?meta.banner:null);if(now)put(now);else picture(meta.banner).then(put);return box;}
+function icon(meta){const box=h('div',{class:'fpm-icon',style:'background:hsl('+hue(meta.id)+' 55% 48%)'},h('b',{},(meta.name||'?').trim().charAt(0).toUpperCase()));
+ const put=u=>{if(u){box.style.background='#fff';box.replaceChildren(h('img',{src:u,alt:'',decoding:'sync'}));}};
+ const now=ready.get(meta.icon)||(/^data:/.test(meta.icon||'')?meta.icon:null);if(now)put(now);else picture(meta.icon).then(put);return box;}
+const tagsOf=meta=>String(meta.tags||'').split(/[\s,]+/).map(t=>t.replace(/^#/,'').toLowerCase()).filter(Boolean).slice(0,8);
+const sizeOf=code=>{const n=new Blob([code||'']).size;return n<1024?n+' B':n<1048576?(n/1024).toFixed(n<10240?1:0)+' KB':(n/1048576).toFixed(1)+' MB';};
+function matches(q,meta){q=q.trim().toLowerCase();if(!q)return true;
+ return q.split(/\s+/).every(w=>w.startsWith('#')?tagsOf(meta).some(t=>t.startsWith(w.slice(1))):[meta.name,meta.author,meta.description,meta.id,...tagsOf(meta)].join(' ').toLowerCase().includes(w));}
+const TEMPLATE=`// ==FisterPlugin==
+// @id          my-plugin
+// @name        My Plugin
+// @version     1.0.0
+// @author      me
+// @description What my plugin does.
+// @tags        fun
+// ==/FisterPlugin==
+
+fister.settings.define({
+  message: { type: 'text', label: 'Message on a KO', default: 'Nice!' },
+});
+
+fister.on('kill', e => {
+  if (e.byMe) fister.ui.toast(fister.settings.get('message'));
+});
+`;
 const mounts=new Set();
-function mountManager(host,floating){css();const ui={host,view:'installed',busy:'',query:'',confirm:null,openSettings:new Set(),openLogs:new Set(),message:''};mounts.add(ui);render(ui);
- const off=()=>{if(!host.isConnected){mounts.delete(ui);listeners.delete(re);}};const re=()=>{off();if(mounts.has(ui))render(ui);};listeners.add(re);return ui;}
+function mountManager(host,floating){css();const ui={host,view:'installed',busy:'',query:'',confirm:null,menu:false,link:false,sheet:null,message:''};mounts.add(ui);render(ui);
+ const re=()=>{if(!host.isConnected){mounts.delete(ui);listeners.delete(re);return;}if(!ui.sheet||ui.sheet.tab!=='code')render(ui);};listeners.add(re);return ui;}
 function render(ui){const root=h('div',{class:'fpm'});
- const say=(t)=>{ui.message=t;render(ui);};
+ const say=t=>{ui.message=t;render(ui);};
  const run=async(label,fn)=>{ui.busy=label;render(ui);try{await fn();}catch(e){ui.message=String(e?.message||e);}ui.busy='';render(ui);};
- const askInstall=(code,source)=>{let meta;try{meta=parseMeta(code);}catch(e){say(String(e.message));return;}ui.confirm={code,source,meta};render(ui);ui.host.scrollTop=0;};
- // header
- const bar=h('div',{class:'fpm-row'},
-  button(ui.view==='catalog'?'Installed plugins':'Browse plugins',()=>{ui.view=ui.view==='catalog'?'installed':'catalog';ui.message='';render(ui);if(ui.view==='catalog')run('Loading the catalog…',async()=>{await getCatalog(true);});}),
-  button('Install from link…',()=>{ui.view='link';ui.message='';render(ui);}),
-  button('Install from file…',()=>file.click()),
-  button('Check for updates',()=>run('Checking for updates…',async()=>{const n=await checkUpdates(false);ui.message=n?n+' update'+(n>1?'s':'')+' available.':'Everything is up to date.';})));
+ const askInstall=(code,source)=>{let meta;try{meta=parseMeta(code);}catch(e){say(String(e.message));return;}ui.confirm={code,source,meta};ui.link=false;render(ui);ui.host.scrollTop=0;};
+ const openCatalog=()=>{ui.view='catalog';ui.menu=false;ui.message='';render(ui);run('Loading the catalog…',async()=>{await getCatalog(true);});};
+ // top bar: search + Add plugin
+ const search=h('input',{type:'search',class:'fpm-search fister-react95-input',placeholder:'Search creators, names or #tags',value:ui.query,'aria-label':'Search plugins',
+  oninput:()=>{ui.query=search.value;const pos=search.selectionStart;render(ui);const s=ui.host.querySelector('.fpm-search');s.focus();try{s.setSelectionRange(pos,pos);}catch{}}});
  const file=h('input',{type:'file',accept:'.js,text/javascript',hidden:true,onchange:async()=>{const f=file.files?.[0];if(!f)return;if(f.size>512*1024){say('That file is bigger than 512 KB, which is too big for a plugin.');return;}askInstall(await f.text(),{type:'file',name:f.name});}});
- root.append(h('fieldset',{},h('legend',{},'Plugins'),bar,file,
-  h('p',{class:'settings-note'},'Plugins are code that runs in the game page: they can do anything the page can, including reading your chat and sending requests as you. Only install plugins from people you trust. Add ?plugins=off to the address to start with every plugin off.'),
-  SAFE?h('p',{class:'settings-note',style:'color:#b00000;font-weight:700'},'Safe mode: plugins are off for this visit (?plugins=off).'):null,
-  game.patched?null:h('p',{class:'settings-note'},W.__fisterRuntimeLoaded&&!game.patched?'Game events are not available: update FisterQoL to 2.3.6 or newer, which passes the plugin hooks to the game.':'Game events become available once the game has loaded.'),
-  game.missed?.length?h('p',{class:'settings-note'},'This game version changed a few spots, so these are missing until the next Plugin Manager update: '+game.missed.join(', ')+'.'):null,
-  ui.busy?h('p',{class:'settings-note',role:'status'},ui.busy):null,ui.message?h('p',{class:'settings-note',role:'status',style:'font-weight:700'},ui.message):null));
+ const top=h('div',{class:'fpm-top'},search,button('+ Add plugin',()=>{ui.menu=!ui.menu;render(ui);},{class:'fister-react95-button win95-btn fpm-add','aria-expanded':String(ui.menu)}),file);
+ if(ui.menu)top.append(h('div',{class:'fpm-menu',role:'menu'},
+  button('Browse the catalog',openCatalog,{role:'menuitem'}),
+  button('Install from a link…',()=>{ui.menu=false;ui.link=true;render(ui);},{role:'menuitem'}),
+  button('Install from a file…',()=>{ui.menu=false;render(ui);file.click();},{role:'menuitem'}),
+  button('Write a new plugin…',()=>{ui.menu=false;ui.sheet={id:null,tab:'code',draft:TEMPLATE,status:''};render(ui);},{role:'menuitem'}),
+  button('Check for updates',()=>{ui.menu=false;run('Checking for updates…',async()=>{const n=await checkUpdates(false);ui.message=n?n+' update'+(n>1?'s':'')+' available.':'Everything is up to date.';});},{role:'menuitem'})));
+ root.append(top);
+ // notes
+ const notes=[];
+ if(SAFE)notes.push(h('p',{class:'fpm-note warn'},'Safe mode: plugins are off for this visit (?plugins=off).'));
+ if(!game.patched)notes.push(h('p',{class:'fpm-note'},W.__fisterRuntimeLoaded?'Game events are not available: update FisterQoL to 2.3.6 or newer, which passes the plugin hooks to the game.':'Game events become available once the game has loaded.'));
+ if(game.missed?.length)notes.push(h('p',{class:'fpm-note'},'This game version moved a few spots, so these are off until the next Plugin Manager update: '+game.missed.join(', ')+'.'));
+ if(ui.busy)notes.push(h('p',{class:'fpm-note',role:'status'},ui.busy));if(ui.message)notes.push(h('p',{class:'fpm-msg',role:'status'},ui.message));
+ root.append(...notes);
+ // install from a link
+ if(ui.link){const input=h('input',{type:'url',class:'fister-react95-input',placeholder:'https://raw.githubusercontent.com/you/repo/main/my-plugin.fister.js'});
+  root.append(h('div',{class:'fpm-confirm',style:'border-color:#666;background:#f4f4f4'},h('b',{},'Install from a link'),h('div',{class:'fpm-row'},input,button('Get it',()=>run('Downloading…',async()=>{askInstall(await httpGet(input.value.trim()),{type:'url',url:input.value.trim()});})),button('Cancel',()=>{ui.link=false;render(ui);})),
+   h('p',{class:'fpm-note'},'Use a direct link to the plugin\'s .js file (on GitHub, the "Raw" link). It can update itself from the same address.')));setTimeout(()=>input.focus(),0);}
  // confirm install
  if(ui.confirm){const {meta,source,code}=ui.confirm,old=plugins.get(meta.id);
-  root.append(h('div',{class:'fpm-confirm',role:'alertdialog'},h('b',{},(old?'Update ':'Install ')+meta.name+' '+meta.version+'?'),
-   h('div',{},meta.description||'No description.'),h('div',{class:'fpm-small'},'By '+(meta.author||'unknown')+' · from '+(source.type==='file'?'the file '+(source.name||''):source.type==='catalog'?'the plugin catalog':source.url)),
-   source.type!=='catalog'?h('div',{class:'fpm-small',style:'color:#b00000'},'This plugin is not from the catalog. Only install it if you trust whoever made it.'):null,
-   old?h('div',{class:'fpm-small'},'You have version '+old.meta.version+' installed; it will be replaced.'):null,
-   h('div',{class:'fpm-row'},button(old?'Update':'Install',()=>run('Installing…',async()=>{await install(code,source);ui.confirm=null;ui.message=meta.name+' is installed'+(SAFE?'.':' and on.');})),button('Cancel',()=>{ui.confirm=null;render(ui);}))));}
- // install from link
- if(ui.view==='link'){const input=h('input',{type:'url',placeholder:'https://raw.githubusercontent.com/you/repo/main/my-plugin.fister.js',class:'fister-react95-input'});
-  root.append(h('fieldset',{},h('legend',{},'Install from a link'),h('div',{class:'fpm-row'},input,button('Get it',()=>run('Downloading…',async()=>{const url=input.value.trim();const code=await httpGet(url);askInstall(code,{type:'url',url});}))),
-   h('p',{class:'settings-note'},'Use a direct link to the plugin\'s .js file (on GitHub, the "Raw" link). Plugins installed from a link can update themselves from the same address.')));}
- // catalog
- if(ui.view==='catalog'){const list=h('div',{class:'fpm'}),search=h('input',{type:'search',placeholder:'Search plugins…',value:ui.query,class:'fister-react95-input',oninput:()=>{ui.query=search.value;fill();}});
-  const fill=()=>{list.replaceChildren();if(!catalog){list.append(h('p',{class:'settings-note'},ui.busy?'Loading…':'Could not load the catalog.'));return;}const q=ui.query.trim().toLowerCase();
-   const items=catalog.filter(p=>!q||[p.name,p.description,p.author,...(p.tags||[])].join(' ').toLowerCase().includes(q));if(!items.length)list.append(h('p',{class:'settings-note'},'No plugins match.'));
-   for(const p of items){const have=plugins.get(p.id),upd=have&&newer(p.version,have.meta.version);
-    list.append(h('div',{class:'fpm-card'},h('div',{class:'fpm-head'},h('b',{},p.name||p.id),h('span',{class:'fpm-small'},'v'+(p.version||'?')+(p.author?' · by '+p.author:'')),have?h('span',{class:'fpm-badge'},upd?'update':'installed'):null),
-     h('div',{},p.description||''),(p.tags||[]).length?h('div',{class:'fpm-small'},p.tags.join(' · ')):null,
-     h('div',{class:'fpm-row'},(!have||upd)?button(upd?'Update':'Install',()=>run('Downloading '+(p.name||p.id)+'…',async()=>{const code=await httpGet(p.url),meta=parseMeta(code);if(meta.id!==p.id)throw Error('The catalog entry and the plugin file disagree about its id.');askInstall(code,{type:'catalog',url:p.url});})):null,
-      p.homepage?h('a',{href:p.homepage,target:'_blank',rel:'noopener'},'More info'):null)));}};
-  fill();root.append(h('fieldset',{},h('legend',{},'Plugin catalog'),h('div',{class:'fpm-row'},search),list,h('p',{class:'settings-note'},'From github.com/jaxonb423/fister-plugins. Want yours listed? Open a pull request there.')));}
- // installed
- const recs=[...plugins.values()].sort((a,b)=>a.meta.name.localeCompare(b.meta.name));
- const inst=h('fieldset',{},h('legend',{},'Installed ('+recs.length+')'));
- if(!recs.length)inst.append(h('p',{class:'settings-note'},'No plugins yet. Press "Browse plugins" to find some.'));
- for(const r of recs){const run_=running.get(r.id),err=run_?.error,cb=h('input',{type:'checkbox',checked:r.enabled,id:'fpm-on-'+r.id,onchange:()=>setEnabled(r.id,cb.checked)});
-  const card=h('div',{class:'fpm-card'+(r.enabled?'':' off')},
-   h('div',{class:'fpm-head'},h('label',{class:'fpm-toggle',for:'fpm-on-'+r.id},cb,h('b',{},r.meta.name)),h('span',{class:'fpm-small'},'v'+r.meta.version+(r.meta.author?' · by '+r.meta.author:'')),
-    err?h('span',{class:'fpm-badge err',title:err},'crashed'):null,r.update?h('span',{class:'fpm-badge upd'},'v'+r.update.version+' available'):null),
-   r.meta.description?h('div',{},r.meta.description):null,
-   err?h('div',{class:'fpm-small',style:'color:#b00000'},'Error: '+err):null,
-   h('div',{class:'fpm-small'},'From '+(r.source?.type==='catalog'?'the catalog':r.source?.type==='url'?r.source.url:'a file ('+(r.source?.name||'')+')')),
-   h('div',{class:'fpm-row'},
-    r.update?button('Update to '+r.update.version,()=>run('Updating…',async()=>{await install(r.update.code,r.source);ui.message=r.meta.name+' updated.';})):null,
-    run_&&Object.keys(run_.settingsSchema).length?button(ui.openSettings.has(r.id)?'Hide settings':'Settings',()=>{ui.openSettings.has(r.id)?ui.openSettings.delete(r.id):ui.openSettings.add(r.id);render(ui);}):null,
-    run_?button(ui.openLogs.has(r.id)?'Hide log':'Log',()=>{ui.openLogs.has(r.id)?ui.openLogs.delete(r.id):ui.openLogs.add(r.id);render(ui);}):null,
-    r.enabled&&!SAFE?button('Restart',()=>{stop(r.id);start(r.id);}):null,
-    button('Remove',e=>{if(e.target.dataset.sure==='1'){remove(r.id);}else{e.target.dataset.sure='1';e.target.textContent='Sure? Remove';setTimeout(()=>{if(e.target.isConnected){e.target.dataset.sure='';e.target.textContent='Remove';}},4000);}})));
-  if(run_&&ui.openSettings.has(r.id))card.append(settingsForm(run_));
-  if(run_&&ui.openLogs.has(r.id))card.append(h('div',{class:'fpm-log'},run_.logs.join('\n')||'Nothing logged yet.'));
-  inst.append(card);}
- const auto=h('input',{type:'checkbox',checked:prefs.autoUpdate,id:'fpm-auto',onchange:()=>{prefs.autoUpdate=auto.checked;savePrefs();}});
- inst.append(h('label',{class:'settings-checkbox',for:'fpm-auto'},auto,' Update plugins automatically (checks every 6 hours)'));
- root.append(inst);
- root.append(h('p',{class:'settings-note fpm-small'},'Fister Plugin Manager '+VERSION+(game.hookedBy?' · game hooks added by '+game.hookedBy:'')+' · Ctrl+Shift+P opens this anywhere.'));
+  root.append(h('div',{class:'fpm-confirm',role:'alertdialog'},h('b',{},(old?'Update ':'Install ')+meta.name+' '+meta.version+'?'),h('div',{},meta.description||'No description.'),
+   h('div',{class:'fpm-note'},'By '+(meta.author||'unknown')+' · '+sizeOf(code)+' · from '+(source.type==='file'?'the file '+(source.name||''):source.type==='catalog'?'the plugin catalog':source.type==='local'?'your editor':source.url)),
+   source.type!=='catalog'&&source.type!=='local'?h('div',{class:'fpm-note warn'},'Not from the catalog. Plugins can do anything the game page can; only install it if you trust whoever made it.'):null,
+   old?h('div',{class:'fpm-note'},'Replaces version '+old.meta.version+'.'):null,
+   h('div',{class:'fpm-row'},button(old?'Update':'Install',()=>run('Installing…',async()=>{await install(code,source);ui.confirm=null;ui.message=meta.name+(SAFE?' is installed.':' is installed and on.');})),button('Cancel',()=>{ui.confirm=null;render(ui);}))));}
+ // cards
+ const grid=h('div',{class:'fpm-grid'});
+ if(ui.view==='catalog'){root.append(h('div',{class:'fpm-heading'},button('‹ Installed',()=>{ui.view='installed';render(ui);}),'Plugin catalog'));
+  const items=(catalog||[]).filter(p=>matches(ui.query,p));
+  for(const p of items){const have=plugins.get(p.id),upd=have&&newer(p.version,have.meta.version),meta={...p,tags:(p.tags||[]).join(' ')};
+   grid.append(card(ui,meta,{flags:[have?h('span',{class:'fpm-flag '+(upd?'upd':'have')},upd?'update':'installed'):null],size:p.size||null,
+    foot:[h('span',{class:'fpm-gap'}),p.homepage?h('a',{href:p.homepage,target:'_blank',rel:'noopener'},'More info'):null,(!have||upd)?button(upd?'Update':'Install',()=>run('Downloading '+p.name+'…',async()=>{const code=await httpGet(p.url),m=parseMeta(code);if(m.id!==p.id)throw Error('The catalog entry and the plugin file disagree about its id.');askInstall(code,{type:'catalog',url:p.url});})):null]}));}
+  root.append(items.length?grid:h('div',{class:'fpm-empty'},catalog?'No plugins match.':ui.busy?'Loading…':'Could not load the catalog.'));
+  root.append(h('p',{class:'fpm-note'},'From github.com/jaxonb423/fister-plugins. Want yours listed? Open a pull request there.'));}
+ else{const recs=[...plugins.values()].sort((a,b)=>a.meta.name.localeCompare(b.meta.name)).filter(r=>matches(ui.query,r.meta));
+  for(const r of recs){const run_=running.get(r.id),err=run_?.error;
+   const sw=h('button',{type:'button',class:'fpm-switch',role:'switch','aria-checked':String(!!r.enabled),'aria-label':(r.enabled?'Turn off ':'Turn on ')+r.meta.name,disabled:SAFE,onclick:()=>setEnabled(r.id,!r.enabled)});
+   grid.append(card(ui,r.meta,{off:!r.enabled,code:r.code,error:err,
+    flags:[err?h('span',{class:'fpm-flag err',title:err},'crashed'):null,r.update?h('span',{class:'fpm-flag upd'},'v'+r.update.version+' available'):null],
+    foot:[sw,h('span',{class:'fpm-gap'}),r.update?button('Update',()=>run('Updating…',async()=>{await install(r.update.code,r.source);ui.message=r.meta.name+' updated.';})):null,
+     button('Edit',()=>{ui.sheet={id:r.id,tab:run_&&Object.keys(run_.settingsSchema).length?'settings':'code',draft:r.code,status:''};render(ui);}),
+     button('Remove',e=>{if(e.currentTarget.dataset.sure==='1')remove(r.id);else{const b=e.currentTarget;b.dataset.sure='1';b.textContent='Sure?';setTimeout(()=>{if(b.isConnected){b.dataset.sure='';b.textContent='Remove';}},4000);}},{class:'fister-react95-button win95-btn fpm-danger'})]}));}
+  root.append(recs.length?grid:h('div',{class:'fpm-empty'},plugins.size?'No plugins match.':'No plugins yet. Press "+ Add plugin" to browse the catalog.'));
+  const auto=h('input',{type:'checkbox',checked:prefs.autoUpdate,id:'fpm-auto',onchange:()=>{prefs.autoUpdate=auto.checked;savePrefs();}});
+  root.append(h('label',{class:'fpm-toggle',for:'fpm-auto'},auto,'Update plugins automatically (checks every 6 hours)'));}
+ root.append(h('p',{class:'fpm-note'},'Plugins are code that runs in the game page. Only install ones from people you trust. Start with ?plugins=off if one breaks the game. · Fister Plugin Manager '+VERSION+(game.hookedBy?' · game hooks added by '+game.hookedBy:'')+' · Ctrl+Shift+P'));
+ if(ui.sheet)root.append(sheet(ui));
  const scroll=ui.host.scrollTop;ui.host.replaceChildren(root);ui.host.scrollTop=scroll;}
+function card(ui,meta,o){const tags=tagsOf(meta);
+ return h('article',{class:'fpm-card'+(o.off?' off':'')},banner(meta,o.flags||[]),
+  h('div',{class:'fpm-body'},
+   h('div',{class:'fpm-title'},icon(meta),h('div',{style:'min-width:0'},h('div',{class:'fpm-name',title:meta.name},meta.name),
+    h('div',{class:'fpm-sub'},'v'+meta.version+(meta.author?' · by '+meta.author:'')+' · plugin'+(o.code?' · '+sizeOf(o.code):o.size?' · '+o.size:'')))),
+   meta.description?h('div',{class:'fpm-desc'},meta.description):null,o.error?h('div',{class:'fpm-err'},'Error: '+o.error):null,
+   tags.length?h('div',{class:'fpm-tags'},...tags.map(t=>h('button',{type:'button',class:'fpm-tag',onclick:()=>{ui.query='#'+t;render(ui);}},'#'+t))):null,
+   h('div',{class:'fpm-foot'},...o.foot)));}
+// The Edit sheet: settings, code and log for one plugin (or a new one).
+function sheet(ui){const s=ui.sheet,r=s.id?plugins.get(s.id):null,run_=r?running.get(r.id):null,hasSettings=run_&&Object.keys(run_.settingsSchema).length;
+ const tab=(id,label)=>button(label,()=>{s.tab=id;render(ui);},{'aria-pressed':String(s.tab===id)});
+ const box=h('div',{class:'fpm-sheet',role:'dialog','aria-label':r?'Edit '+r.meta.name:'New plugin'},
+  h('div',{class:'fpm-heading'},button('‹ Back',()=>{ui.sheet=null;render(ui);}),r?r.meta.name:'New plugin'),
+  h('div',{class:'fpm-tabs'},r?tab('settings','Settings'):null,tab('code','Code'),r?tab('log','Log'):null));
+ if(s.tab==='settings'&&r)box.append(hasSettings?settingsForm(run_):h('p',{class:'fpm-note'},r.enabled?'This plugin has no settings.':'Turn the plugin on to change its settings.'));
+ if(s.tab==='log'&&r)box.append(h('div',{class:'fpm-log'},run_?.logs.join('\n')||'Nothing logged yet.'),r.enabled&&!SAFE?h('div',{class:'fpm-row'},button('Restart plugin',()=>{stop(r.id);start(r.id);render(ui);})):null);
+ if(s.tab==='code'){const ta=h('textarea',{spellcheck:false,value:s.draft,'aria-label':'Plugin code',oninput:()=>{s.draft=ta.value;},onkeydown:e=>{if(e.key==='Tab'){e.preventDefault();const a=ta.selectionStart;ta.setRangeText('  ',a,ta.selectionEnd,'end');s.draft=ta.value;}e.stopPropagation();}});
+  box.append(ta,h('div',{class:'fpm-row'},button(r?'Save and restart':'Install',async()=>{try{const meta=parseMeta(s.draft);if(r&&meta.id!==r.id)throw Error('Keep the @id the same, or make a new plugin.');
+     await install(s.draft,r&&r.source?.type!=='local'?{...r.source,edited:true}:{type:'local'});s.status='Saved.';ui.sheet={...s,id:meta.id};render(ui);}catch(e){s.status=String(e?.message||e);render(ui);}}),
+   r?button('Undo my changes',()=>{s.draft=r.code;s.status='';render(ui);}):null,
+   h('span',{class:'fpm-note',role:'status'},s.status||'')),
+   r&&r.source?.type!=='local'?h('p',{class:'fpm-note'},'Updates from the original source will replace your changes.'):null);}
+ return box;}
 function settingsForm(run){const form=h('div',{class:'fpm-form'});
  for(const [key,d] of Object.entries(run.settingsSchema)){const v=run.api.settings.get(key),id='fpm-s-'+Math.random().toString(36).slice(2,8),label=h('label',{for:id},d.label||key);let input;
   const set=val=>run.api.settings.set(key,val);
@@ -378,7 +473,7 @@ function settingsForm(run){const form=h('div',{class:'fpm-form'});
   form.append(label,input);if(d.note)form.append(h('span'),h('span',{class:'settings-note fpm-small'},d.note));}
  return form;}
 function openWindow(){let win=document.getElementById('fpm-window');if(win){win.remove();return;}css();
- const body=h('div',{class:'fpm-body fister-react95-content'});
+ const body=h('div',{class:'fpm-body-host fister-react95-content'});
  win=h('div',{id:'fpm-window',class:'fister-react95-window win95-window',role:'dialog','aria-label':'Plugins'},
   h('div',{class:'fister-react95-title-bar win95-title-bar'},h('div',{class:'fister-react95-title-content'},'Plugins'),h('button',{type:'button',class:'fister-react95-title-button win95-title-btn','aria-label':'Close',onclick:()=>win.remove()},'X')),body);
  document.body.append(win);mountManager(body,true);}

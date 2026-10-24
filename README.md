@@ -1,6 +1,6 @@
 # Fister Plugin Manager
 
-A mod manager for [Fister](https://fister.fun). It adds a **Plugins** tab to the game's Settings where you can browse a catalog of plugins, install them from a link or a file, turn them on and off, change their settings, and keep them updated.
+A mod manager for [Fister](https://fister.fun). It adds a **Plugins** tab to the game's Settings: your plugins as cards with a banner, tags and an on/off switch, a search box (names, creators or `#tags`), and a **+ Add plugin** menu to browse the catalog, install from a link or a file, or write your own. **Edit** on a card opens the plugin's settings, its code (change it and press *Save and restart*) and its log.
 
 It works on its own, or alongside [FisterQoL](https://github.com/jaxonb423/FisterQol) (version 2.3.6 or newer); with both installed the Plugins tab sits between General and QoL.
 
@@ -27,12 +27,17 @@ A plugin is a single `.js` file that starts with a header:
 // @version     1.0.0
 // @author      you
 // @description One sentence about what it does.
+// @tags        hud stats           (optional, space-separated, used by search)
+// @icon        https://…/icon.png  (optional, square)
+// @banner      https://…/banner.png (optional, about 600×260)
 // ==/FisterPlugin==
 
 fister.on('kill', e => {
   if (e.byMe) fister.ui.toast('Got one: ' + (e.victim || 'someone'));
 });
 ```
+
+`@icon` and `@banner` take an `https://` link (PNG, JPG, GIF, WebP or SVG, up to 3 MB) or a `data:image/…` URL. Without them the card gets a coloured banner with the plugin's first letter.
 
 The code runs with a `fister` object in scope. Everything you add through `fister` (listeners, styles, elements, timers) is removed automatically when the plugin is turned off, so turning it off and on again works without reloading.
 
@@ -86,8 +91,8 @@ See [`plugins/`](plugins/) for three small examples: a KO counter, hit sounds an
 
 ### Sharing it
 
-- **By link:** put the file somewhere public (a GitHub repo or gist) and share the **Raw** link. Players paste it into *Install from link*, and the plugin updates itself when you raise `@version` at that address.
-- **In the catalog:** open a pull request adding your file under `plugins/` and an entry to [`catalog.json`](catalog.json).
+- **By link:** put the file somewhere public (a GitHub repo or gist) and share the **Raw** link. Players paste it into *+ Add plugin → Install from a link*, and the plugin updates itself when you raise `@version` at that address.
+- **In the catalog:** open a pull request adding your file under `plugins/` (pictures under `plugins/art/`) and an entry to [`catalog.json`](catalog.json), with the same `icon`, `banner` and `tags`.
 
 ## How it hooks into the game
 
