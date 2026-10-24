@@ -1,0 +1,394 @@
+// ==UserScript==
+// @name         Fister Plugin Manager
+// @namespace    fister-plugins.local
+// @version      1.0.0
+// @description  A mod manager for Fister: browse, install, turn on/off, configure and update plugins from its own Plugins tab in Settings. Works on its own or alongside FisterQoL.
+// @match        https://fister.fun/*
+// @match        https://www.fister.fun/*
+// @exclude      https://fister.fun/assets/*
+// @exclude      https://www.fister.fun/assets/*
+// @run-at       document-start
+// @sandbox      JavaScript
+// @grant        GM_addElement
+// @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
+// @connect      raw.githubusercontent.com
+// @connect      gist.githubusercontent.com
+// @connect      *
+// @updateURL    https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/FisterPluginManager.user.js
+// @downloadURL  https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/FisterPluginManager.user.js
+// @noframes
+// ==/UserScript==
+(function(){
+'use strict';
+const W=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
+if(new URL(location.href).pathname!=='/'||W.__fpm)return;
+const VERSION='1.0.0';
+const REPO='https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/';
+const CATALOG_URL=REPO+'catalog.json';
+const PARSER={sha256:'8df29c13797bab293a47ce2d334bdb4dd147b6f6a3830f0c7c94efa99e290b8d',url:REPO+'dist/fpm-parser-1.0.0-8df29c1379.json'};
+const SAFE=new URL(location.href).searchParams.get('plugins')==='off';
+
+// ======================================================================
+// Network: Tampermonkey fetch for plugin code and the catalog (any https address)
+// ======================================================================
+function httpGet(url,timeout=20000){return new Promise((resolve,reject)=>{let u;try{u=new URL(url);}catch{reject(Error('That is not a web address.'));return;}
+ if(u.protocol!=='https:'){reject(Error('Only https:// addresses are allowed.'));return;}
+ if(typeof GM_xmlhttpRequest!=='function'){fetch(u.href,{cache:'no-store'}).then(r=>r.text().then(t=>r.ok?resolve(t):reject(Error('HTTP '+r.status)))).catch(e=>reject(Error('Could not reach '+u.host+' ('+(e?.message||e)+')')));return;}
+ GM_xmlhttpRequest({method:'GET',url:u.href,timeout,headers:{'Cache-Control':'no-cache'},anonymous:true,
+  onload:r=>r.status>=200&&r.status<300?resolve(String(r.responseText||'')):reject(Error('HTTP '+r.status+' from '+u.host)),onerror:()=>reject(Error('Could not reach '+u.host)),ontimeout:()=>reject(Error(u.host+' took too long'))});});}
+const addScript=code=>{const host=document.head||document.documentElement;if(typeof GM_addElement==='function')return GM_addElement(host,'script',{textContent:code});const s=document.createElement('script');s.textContent=code;host.appendChild(s);s.remove();return null;};
+
+// ======================================================================
+// The shared core (window.__fpm): what the patched game calls into
+// ======================================================================
+const bus=new Map(),sticky=new Map();
+function emit(name,data){if(name==='ready'||name==='roundStart')sticky.set(name,data);for(const fn of [...(bus.get(name)||[])])try{fn(data);}catch(e){console.warn('[Fister Plugins] listener for',name,'failed:',e);}}
+function listen(name,fn){let set=bus.get(name);if(!set)bus.set(name,set=new Set());set.add(fn);if(sticky.has(name)&&name==='ready')queueMicrotask(()=>{try{fn(sticky.get(name));}catch{}});return()=>set.delete(fn);}
+const game={client:null,scene:null,getters:null,patched:false,hookedBy:null};
+const localId=()=>{const sc=game.scene;return sc?.localPlayerId??sc?.latestLocalPlayerState?.id??null;};
+const nameOf=id=>{try{return game.scene?.players?.get?.(id)?.username??null;}catch{return null;}};
+const watched=new WeakSet();
+const hook={
+ // the network client the game plays combat sounds from
+ client(c){if(!c||typeof c!=='object'||watched.has(c))return;watched.add(c);game.client=c;
+  const on=(n,f)=>{try{if(typeof c[n]==='function')c[n](e=>{try{f(e||{});}catch(err){console.warn('[Fister Plugins]',n,err);}});}catch{}};
+  on('onKill',e=>{const me=localId(),myName=me!=null?nameOf(me):null;emit('kill',{killerId:e.killerId??null,victimId:e.victimId??null,killer:e.killerUsername??nameOf(e.killerId),victim:e.victimUsername??nameOf(e.victimId),
+   byMe:(me!=null&&e.killerId===me)||(!!myName&&e.killerUsername===myName),ofMe:(me!=null&&e.victimId===me)||(!!myName&&e.victimUsername===myName),method:e.method??null,raw:e});});
+  on('onParrySuccess',e=>{const me=localId();emit('parry',{defenderId:e.defenderId,attackerId:e.attackerId,byMe:me!=null&&e.defenderId===me,againstMe:me!=null&&e.attackerId===me,raw:e});});
+  on('onAirKickStart',e=>{const me=localId();emit('airKick',{playerId:e.playerId,byMe:me!=null&&e.playerId===me,raw:e});});
+  on('onPunch',e=>{const me=localId();emit('punch',{playerId:e.playerId,victimId:e.victimId??null,hit:!!e.hitPlayer,strength:e.strength??null,byMe:me!=null&&e.playerId===me,onMe:me!=null&&e.victimId===me,raw:e});});},
+ boot(getters){game.getters=getters;const tick=()=>{try{const g=getters();if(g.scene)game.scene=g.scene;}catch{}if(game.scene){emit('ready',{scene:game.scene});return;}setTimeout(tick,250);};tick();},
+ emit(name){if(name==='roundEnd'||name==='matchEnd')sticky.delete('roundStart');emit(name,{});},
+ panel(el){if(el&&!el.dataset.fpm){el.dataset.fpm='1';mountManager(el,false);}}};
+Object.defineProperty(W,'__fpm',{value:{version:VERSION,hook,define:(id,fn)=>defineFromScript(id,fn),get game(){return game;}},configurable:false,writable:false});
+
+// ======================================================================
+// Hooks added to the game's main module (applied by FisterQoL when it is
+// installed, or by our own loader when it is not)
+// ======================================================================
+function fpmPatch(source){
+ const once=(s,a,b)=>{if(s.split(a).length!==2)throw Error('changed');return s.replace(a,()=>b);};
+ const one=(s,re,label)=>{const v=[...new Set([...s.matchAll(new RegExp(re.source,'g'))].map(m=>m[1]))];if(v.length!==1)throw Error(label);return v[0];};
+ const missed=[];
+ // combat events
+ try{const i=source.indexOf('.onParrySuccess(');if(i<0)throw Error('combat');const f=source.lastIndexOf('function ',i);
+  const m=source.slice(f,i).match(/^function [\w$]+\(([\w$]+),[\w$]+,[\w$]+\)\{/);if(!m||source.slice(i-m[1].length,i)!==m[1])throw Error('combat');
+  source=source.slice(0,f+m[0].length)+'try{window.__fpm.hook.client('+m[1]+');}catch(e){}'+source.slice(f+m[0].length);}catch{missed.push('combat events');}
+ // rounds
+ const before=source;
+ source=source.replace(/onRoundEnd:([\w$]+)=>\{/g,m=>m+'try{window.__fpm.hook.emit("roundEnd");}catch(e){}');
+ source=source.replace(/onMatchEnd:([\w$]+)=>\{/g,m=>m+'try{window.__fpm.hook.emit("matchEnd");}catch(e){}');
+ source=source.replace(/onRoundStart:\(\)=>\{/g,m=>m+'try{window.__fpm.hook.emit("roundStart");}catch(e){}');
+ source=source.replace(/onGameStart:(?:[\w$]+|\(\))=>\{/g,m=>m+'try{window.__fpm.hook.emit("roundStart");}catch(e){}');
+ if(source===before)missed.push('round events');
+ // the Plugins tab in Settings
+ try{const jsx=one(source,/function [\w$]+\(\{className:e,compact:t=!1,type:n=`button`,\.\.\.r\}\)\{return\(0,([\w$]+)\.jsx\)/,'jsx');
+  const esc=jsx.replace(/[$]/g,'\\$');
+  const tab=source.match(new RegExp('\\(0,'+esc+'\\.jsx\\)\\(([\\w$]+),\\{active:!0,dataTab:"settings-main",id:"settings-main-tab",title:"General"\\}\\)'));if(!tab)throw Error('tab');
+  const panel=one(source,/function ([\w$]+)\(\)\{return\(0,[\w$]+\.jsxs\)\(`div`,\{className:"settings-tab-content active",id:"settings-main"/,'panel');
+  const call='(0,'+jsx+'.jsx)';
+  source=once(source,tab[0],tab[0]+','+call+'('+tab[1]+',{dataTab:"settings-plugins",id:"settings-plugins-tab",title:"Plugins"})');
+  source=once(source,call+'('+panel+',{})',call+'(__fpmPluginsPanel,{}),'+call+'('+panel+',{})');
+  source='function __fpmPluginsPanel(){return '+call+'("div",{className:"settings-tab-content",id:"settings-plugins",role:"tabpanel","aria-labelledby":"settings-plugins-tab",hidden:!0,ref:function(e){try{e&&window.__fpm.hook.panel(e);}catch(x){}}});}\n'+source;}
+ catch{missed.push('Plugins tab (Ctrl+Shift+P still opens it)');}
+ // the game scene (players, local player)
+ try{const scene=one(source,/([\w$]+)\.getCanvas\(\)/,'scene');source+='\n;try{window.__fpm.hook.boot(function(){return {scene:'+scene+'};});}catch(e){}\n';}catch{missed.push('game scene');}
+ game.patched=true;game.missed=missed;if(missed.length)console.warn('[Fister Plugins] Some hooks did not match this game version:',missed.join(', '));
+ return source;}
+const hooks=Array.isArray(W.__fisterPatchHooks)?W.__fisterPatchHooks:(W.__fisterPatchHooks=[]);
+if(!SAFE)hooks.push({id:'fister-plugin-manager',version:VERSION,name:'Fister Plugin Manager',patch:s=>{game.hookedBy=game.hookedBy||'FisterQoL';return fpmPatch(s);}});
+
+// ======================================================================
+// Our own loader, used only when FisterQoL is not loading the game
+// ======================================================================
+const LOADER=(()=>{
+ const regexName=n=>n.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+ function binding(source,pattern,label,group=1){const v=[...new Set([...source.matchAll(new RegExp(pattern.source,pattern.flags.includes('g')?pattern.flags:pattern.flags+'g'))].map(m=>m[group]))];if(v.length!==1)throw Error('Cannot identify '+label+'.');return v[0];}
+ const importBindings=source=>[...source.matchAll(/import\{([^}]+)\}from["'`]([^"'`]+)["'`]/g)].map(m=>({path:m[2],names:Object.fromEntries(m[1].split(',').map(x=>x.trim().split(/\s+as\s+/)).map(([a,b])=>[a,b||a]))}));
+ function absoluteImports(source,url){
+  source=source.replace(/\bfrom\s*(["'`])(\.{1,2}\/[^"'`$]+)\1/g,(_a,q,p)=>'from'+q+new URL(p,url).href+q);
+  source=source.replace(/\bimport\(\s*(["'`])(\.{1,2}\/[^"'`$]+)\1\s*\)/g,(_a,q,p)=>'import('+q+new URL(p,url).href+q+')');
+  source=source.replace(/\bimport\s*(["'])(\.{1,2}\/[^"'$]+)\1/g,(_a,q,p)=>'import '+q+new URL(p,url).href+q);
+  return source.replace(/\bimport\.meta\.url\b/g,JSON.stringify(url));}
+ function readableClient(source){const P=W.__fisterParser;
+  const decoder=source.match(/function ([\w$]+)\(([\w$]+),[\w$]+\)\{return \2-=0,([\w$]+)\(\)\[\2\]\}/);if(!decoder)throw Error('Unsupported client string table.');
+  const tableStart=source.indexOf('function '+decoder[3]+'(){'),parseStart=source.indexOf('JSON.parse(`',tableStart);if(tableStart<0||parseStart<0)throw Error('Client string table not found.');
+  const literal=P.parseExpressionAt(source,parseStart+'JSON.parse('.length,{ecmaVersion:'latest'});
+  const template=literal.type==='CallExpression'&&literal.callee.type==='MemberExpression'?literal.callee.object:literal;
+  if(template.type!=='TemplateLiteral'||template.expressions.length)throw Error('Unsupported client string table encoding.');
+  const table=JSON.parse(template.quasis[0].value.cooked.replace(/[A-Za-z]/g,c=>String.fromCharCode(c.charCodeAt(0)+(c.toLowerCase()<='m'?13:-13))));
+  const ast=P.parse(source,{ecmaVersion:'latest',sourceType:'module',ranges:true}),scopes=P.analyze(ast,{ecmaVersion:2022,sourceType:'module'});
+  const variable=scopes.scopes.flatMap(s=>s.variables).find(v=>v.name===decoder[1]&&v.defs.some(d=>d.type==='FunctionName'&&d.node.start===source.indexOf(decoder[0])));
+  if(!variable)throw Error('Cannot resolve client string decoder.');const edits=[];
+  for(const ref of variable.references){const name=ref.identifier,call=source.slice(name.end,name.end+24).match(/^\((\d+)\)/);if(!call)continue;
+   if(typeof table[Number(call[1])]!=='string')throw Error('Invalid client string-table index.');edits.push({start:name.start,end:name.end+call[0].length,text:JSON.stringify(table[Number(call[1])])});}
+  edits.sort((a,b)=>a.start-b.start);let cursor=0;const chunks=[];for(const e of edits){chunks.push(source.slice(cursor,e.start),e.text);cursor=e.end;}chunks.push(source.slice(cursor));return chunks.join('');}
+ function bootstrapInfo(raw,url){const source=readableClient(raw),imports=importBindings(source);
+  const candidates=[...source.matchAll(/import\(\s*(["'`])(\.\/[^"'`]+\.js)\1\s*\),[\w$]+\(\[([\d,]+)\]\)/g)].map(m=>({path:m[2],count:m[3].split(',').length})).sort((a,b)=>b.count-a.count);
+  if(!candidates.length||candidates[0].count===candidates[1]?.count)throw Error('Cannot identify the game runtime import.');
+  const replaceChildren=binding(source,/([\w$]+)="replaceChildren"/,'DOM replacement helper');
+  const guardName=binding(source,new RegExp('\\['+regexName(replaceChildren)+'\\]\\([^)]*\\),([\\w$]+)\\('),'DOM guard');
+  const bootName=binding(source,/\(([\w$]+)\(\),[\w$]+\(\(\)=>import\(/,'boot preparation');
+  const guards=imports.filter(i=>i.names.n===guardName),preps=imports.filter(i=>i.names.t===bootName);if(guards.length!==1||preps.length!==1)throw Error('Cannot identify native loading helpers.');
+  const filesMatch=source.match(/m\.f=\[(.*?)\]/s),files=filesMatch?JSON.parse('['+filesMatch[1]+']'):[];
+  const html=binding(source,/(["'`])(\/runtime-ui\.html[^"'`]*?)\1/,'runtime UI',2),versions=[...source.matchAll(/encodeURIComponent\("([^"\n]+)"\)/g)],version=versions.find(m=>/^[a-f\d]+:\d+$/.test(m[1]))?.[1];
+  return {mainUrl:new URL(candidates[0].path,url).href,guardUrl:new URL(guards[0].path,url).href,bootUrl:new URL(preps[0].path,url).href,files,htmlUrl:new URL(html+(html.includes('?')?'':'?v=')+(version?encodeURIComponent(version):''),url).href};}
+ async function getText(url){const c=new AbortController(),t=setTimeout(()=>c.abort(),15000);try{const r=await fetch(url,{credentials:'include',cache:'no-store',signal:c.signal});if(!r.ok)throw Error('Could not load '+url+' ('+r.status+')');return await r.text();}finally{clearTimeout(t);}}
+ async function sha256(text){const d=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));return [...new Uint8Array(d)].map(b=>b.toString(16).padStart(2,'0')).join('');}
+ async function parser(){if(W.__fisterParser)return;let text=await idb('cache','readonly',s=>s.get(PARSER.sha256)).catch(()=>null);
+  if(typeof text!=='string'){text=await httpGet(PARSER.url,45000);if(await sha256(text)!==PARSER.sha256)throw Error('The code parser on GitHub does not match this script.');idb('cache','readwrite',s=>{s.clear();return s.put(text,PARSER.sha256);}).catch(()=>{});}
+  addScript(JSON.parse(text).parser+'\n;window.__fisterParser=__fisterParser;');if(!W.__fisterParser)throw Error('Could not start the code parser.');}
+ let promise=null;
+ async function load(){
+  if(document.readyState==='loading')await new Promise(r=>document.addEventListener('DOMContentLoaded',r,{once:true}));
+  const entry=[...document.querySelectorAll('script[type=module][src]')].find(el=>new URL(el.src,location.href).pathname.startsWith('/assets/'));
+  if(!entry)throw Error('The game bootstrap was not found.');
+  const entryUrl=new URL(entry.src,location.href).href;let info,patched=null;
+  try{await parser();info=bootstrapInfo(await getText(entryUrl),entryUrl);
+   const key='fpm:'+VERSION+'|'+info.mainUrl;const hit=await idb('cache','readonly',s=>s.get(key)).catch(()=>null);
+   if(typeof hit==='string')patched=hit;else{const raw=await getText(info.mainUrl);let src=readableClient(raw);game.hookedBy='Plugin Manager';src=fpmPatch(src);patched=absoluteImports(src,info.mainUrl);idb('cache','readwrite',s=>s.put(patched,key)).catch(()=>{});}
+   if(typeof hit==='string')game.hookedBy='Plugin Manager';}
+  catch(error){console.warn('[Fister Plugins] Could not hook the game; starting it normally.',error);game.loadError=String(error?.message||error);if(!info)throw error;}
+  const root=document.getElementById('runtime-ui-root');
+  if(root&&root.dataset.loaded!=='1'){const t=document.createElement('template');t.innerHTML=await getText(info.htmlUrl);root.replaceChildren(t.content);root.dataset.loaded='1';}
+  for(const file of info.files.filter(f=>f.endsWith('.css'))){const href=new URL('/'+file,location.origin).href;if(![...document.querySelectorAll('link[href]')].some(l=>l.href===href)){const l=document.createElement('link');l.rel='stylesheet';l.href=href;document.head.appendChild(l);}}
+  return await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('The game took too long to start.')),45000);
+   W.__fpmMainResolve=()=>{clearTimeout(timer);resolve({});};
+   const code='import {n as __g} from '+JSON.stringify(info.guardUrl)+';\nimport {t as __b} from '+JSON.stringify(info.bootUrl)+';\n__b();__g(document.getElementById("runtime-ui-root")||document);\n'+
+    (patched||'await import('+JSON.stringify(info.mainUrl)+');')+'\n;globalThis.__fpmMainResolve();\n';
+   if(typeof GM_addElement==='function')GM_addElement(document.head,'script',{type:'module',id:'fpm-native-module',textContent:code});
+   else{const s=document.createElement('script');s.type='module';s.id='fpm-native-module';s.textContent=code;document.head.appendChild(s);}});}
+ // The game reads this promise when it starts. FisterQoL claims it too; whoever is there when the game asks wins,
+ // and QoL always replaces ours (we return nothing while the page is still loading, which is when QoL checks).
+ function claim(){const d=Object.getOwnPropertyDescriptor(W,'__fisterRuntimeBootPromise');if(d&&(d.get||d.value))return false;
+  Object.defineProperty(W,'__fisterRuntimeBootPromise',{configurable:true,get(){if(document.readyState==='loading'&&!promise)return undefined;
+    if(!promise)promise=load().catch(e=>{console.error('[Fister Plugins] loading failed',e);Object.defineProperty(W,'__fisterRuntimeBootPromise',{configurable:true,writable:true,value:undefined});throw e;});return promise;},
+   set(v){promise=v==null?null:v;}});return true;}
+ return {claim};})();
+if(!SAFE)LOADER.claim();
+
+// ======================================================================
+// Storage
+// ======================================================================
+let dbp=null;
+function db(){return dbp||(dbp=new Promise((res,rej)=>{const r=indexedDB.open('fister-plugin-manager',1);r.onupgradeneeded=()=>{for(const s of ['plugins','cache'])r.result.createObjectStore(s);};r.onsuccess=()=>res(r.result);r.onerror=()=>{dbp=null;rej(r.error);};}));}
+async function idb(store,mode,fn){const d=await db();return new Promise((res,rej)=>{const t=d.transaction(store,mode),st=t.objectStore(store);let out;const rq=fn(st);if(rq)rq.onsuccess=()=>{out=rq.result;};t.oncomplete=()=>res(out);t.onerror=()=>rej(t.error);t.onabort=()=>rej(t.error);});}
+const PREFS_KEY='fpm-prefs-v1';
+const prefs=(()=>{try{return {autoUpdate:true,lastCheck:0,...JSON.parse(localStorage.getItem(PREFS_KEY)||'{}')};}catch{return {autoUpdate:true,lastCheck:0};}})();
+const savePrefs=()=>{try{localStorage.setItem(PREFS_KEY,JSON.stringify(prefs));}catch{}};
+
+// ======================================================================
+// Plugins: format, install, run
+// ======================================================================
+// A plugin is one .js file that starts with a header:
+//   // ==FisterPlugin==
+//   // @id          ko-counter
+//   // @name        KO Counter
+//   // @version     1.0.0
+//   // @author      you
+//   // @description What it does
+//   // ==/FisterPlugin==
+// and uses the `fister` object (see the README in the fister-plugins repo).
+function parseMeta(code){const m=String(code).match(/\/\/\s*==FisterPlugin==([\s\S]*?)\/\/\s*==\/FisterPlugin==/);if(!m)throw Error('This is not a Fister plugin (the // ==FisterPlugin== header is missing).');
+ const meta={};for(const line of m[1].split('\n')){const k=line.match(/^\s*\/\/\s*@([\w-]+)\s+(.+?)\s*$/);if(k)meta[k[1].toLowerCase()]=k[2];}
+ if(!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(meta.id||''))throw Error('The plugin needs an @id made of lowercase letters, numbers and dashes.');
+ if(!meta.name)throw Error('The plugin needs a @name.');if(!/^\d+(\.\d+){0,3}$/.test(meta.version||''))throw Error('The plugin needs a @version like 1.0.0.');
+ for(const k of ['name','author','description'])if(meta[k])meta[k]=meta[k].slice(0,k==='description'?300:60);return meta;}
+const newer=(a,b)=>{const x=String(a).split('.').map(Number),y=String(b).split('.').map(Number);for(let i=0;i<Math.max(x.length,y.length);i++){const d=(x[i]||0)-(y[i]||0);if(d)return d>0;}return false;};
+const plugins=new Map();          // id -> record {id, meta, code, enabled, source:{type,url}, installedAt, updatedAt, update?}
+const running=new Map();          // id -> {cleanups:[], api, error, logs}
+const listeners=new Set();const changed=()=>{for(const f of listeners)try{f();}catch{}};
+async function loadStore(){try{const rows=await idb('plugins','readonly',s=>s.getAll());for(const r of rows||[])if(r&&r.id)plugins.set(r.id,r);}catch(e){console.warn('[Fister Plugins] storage',e);}}
+const saveRecord=r=>idb('plugins','readwrite',s=>s.put(r,r.id)).catch(e=>console.warn('[Fister Plugins] save',e));
+async function install(code,source){const meta=parseMeta(code),old=plugins.get(meta.id);
+ if(old&&running.has(meta.id))stop(meta.id);
+ const rec={id:meta.id,meta,code,enabled:old?old.enabled:true,source,installedAt:old?.installedAt||Date.now(),updatedAt:Date.now()};plugins.set(meta.id,rec);await saveRecord(rec);
+ if(rec.enabled&&!SAFE)start(meta.id);changed();return rec;}
+async function remove(id){stop(id);plugins.delete(id);await idb('plugins','readwrite',s=>s.delete(id)).catch(()=>{});try{localStorage.removeItem('fpm-settings:'+id);}catch{}changed();}
+async function setEnabled(id,on){const r=plugins.get(id);if(!r)return;r.enabled=!!on;await saveRecord(r);if(on&&!SAFE)start(id);else stop(id);changed();}
+
+// The running side: each plugin gets its own `fister` object; everything it adds through it is undone on stop.
+const pending=new Map();
+function start(id){const r=plugins.get(id);if(!r||running.has(id))return;
+ const run={cleanups:[],error:null,logs:[],settingsSchema:{},onSettings:new Set()};running.set(id,run);run.api=makeApi(r,run);
+ pending.set(id,run);
+ addScript('window.__fpm.define('+JSON.stringify(id)+',function(fister){"use strict";\n'+r.code+'\n});\n//# sourceURL=fister-plugin:'+id+'.js');
+ if(pending.get(id)===run){pending.delete(id);run.error=run.error||'The plugin did not start (a syntax error or blocked script).';changed();}}
+function defineFromScript(id,fn){const run=pending.get(id);if(!run)return;pending.delete(id);
+ try{const out=fn(run.api);if(typeof out==='function')run.cleanups.push(out);}catch(e){run.error=String(e?.message||e);console.error('[Fister Plugins] '+id+' crashed while starting:',e);stopQuietly(run);}changed();}
+function stopQuietly(run){for(const f of run.cleanups.splice(0).reverse())try{f();}catch{}}
+function stop(id){const run=running.get(id);if(!run)return;running.delete(id);stopQuietly(run);changed();}
+function makeApi(rec,run){const meta=rec.meta,id=meta.id,track=f=>{run.cleanups.push(f);return f;};
+ const settingsKey='fpm-settings:'+id,dataKey='fpm-data:'+id;
+ const readSettings=()=>{try{return JSON.parse(localStorage.getItem(settingsKey)||'{}');}catch{return {};}};
+ const log=(...a)=>{run.logs.push(new Date().toLocaleTimeString()+' '+a.map(x=>typeof x==='string'?x:(()=>{try{return JSON.stringify(x);}catch{return String(x);}})()).join(' '));if(run.logs.length>50)run.logs.shift();console.log('['+meta.name+']',...a);};
+ const settings={
+  define(schema){run.settingsSchema={...run.settingsSchema,...(schema||{})};changed();return settings;},
+  get(key){const v=readSettings();if(key===undefined){const out={};for(const [k,d] of Object.entries(run.settingsSchema))out[k]=k in v?v[k]:d.default;return out;}return key in v?v[key]:run.settingsSchema[key]?.default;},
+  set(key,value){const v=readSettings();v[key]=value;try{localStorage.setItem(settingsKey,JSON.stringify(v));}catch{}for(const f of run.onSettings)try{f(key,value);}catch{}},
+  onChange(fn){run.onSettings.add(fn);return track(()=>run.onSettings.delete(fn));}};
+ const layer=()=>{let l=document.getElementById('fpm-layer');if(!l){l=document.createElement('div');l.id='fpm-layer';l.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:9000';(document.body||document.documentElement).append(l);}return l;};
+ return Object.freeze({
+  meta:Object.freeze({...meta}),
+  version:VERSION,
+  log,
+  on(name,fn){if(typeof fn!=='function')throw Error('fister.on needs a function');return track(listen(String(name),fn));},
+  onStop(fn){if(typeof fn==='function')track(fn);},
+  settings,
+  storage:{get(k,d){try{const v=JSON.parse(localStorage.getItem(dataKey)||'{}');return k in v?v[k]:d;}catch{return d;}},set(k,val){let v={};try{v=JSON.parse(localStorage.getItem(dataKey)||'{}');}catch{}v[k]=val;try{localStorage.setItem(dataKey,JSON.stringify(v));}catch{}}},
+  game:Object.freeze({get scene(){return game.scene;},get client(){return game.client;},localPlayerId:localId,playerName:nameOf,
+   players(){try{return [...(game.scene?.players?.values?.()||[])].map(p=>({id:p.id,name:p.username??null,raw:p}));}catch{return [];}},get hooked(){return game.patched;}}),
+  ui:Object.freeze({
+   toast(text,ms=3500){toast(String(text),ms,meta.name);},
+   style(css){const s=document.createElement('style');s.dataset.fpmPlugin=id;s.textContent=String(css);(document.head||document.documentElement).append(s);track(()=>s.remove());return s;},
+   add(el,{interactive=false}={}){if(!(el instanceof Element))throw Error('fister.ui.add needs an element');if(interactive)el.style.pointerEvents='auto';layer().append(el);track(()=>el.remove());return el;},
+   element(tag,props={},...kids){const el=document.createElement(tag);for(const [k,v] of Object.entries(props||{})){if(k==='style'&&typeof v==='object')Object.assign(el.style,v);else if(k.startsWith('on')&&typeof v==='function')el.addEventListener(k.slice(2).toLowerCase(),v);else if(k in el)el[k]=v;else el.setAttribute(k,v);}el.append(...kids);return el;}}),
+  chat:Object.freeze({onMessage(fn){return track(listen('chat',fn));}}),
+  setTimeout(fn,ms){const t=setTimeout(fn,ms);track(()=>clearTimeout(t));return t;},
+  setInterval(fn,ms){const t=setInterval(fn,ms);track(()=>clearInterval(t));return t;},
+  addEventListener(target,type,fn,opts){target.addEventListener(type,fn,opts);track(()=>target.removeEventListener(type,fn,opts));},
+  plugin(setup){if(typeof setup==='function'){const out=setup();if(typeof out==='function')track(out);}}});}
+// Errors thrown later by a plugin (in its listeners or timers) are pinned to it from the stack trace.
+W.addEventListener('error',e=>{const m=String(e?.error?.stack||e?.filename||'').match(/fister-plugin:([a-z0-9_-]+)\.js/);if(m&&running.has(m[1])){running.get(m[1]).error=String(e.message||e.error);changed();}});
+
+// chat messages (read from the page, so it works whatever the game version)
+let chatMo=null;
+function watchChat(){if(chatMo)return;const scan=()=>{const box=document.getElementById('chat')||document.querySelector('[id*="chat"][class*="message"],.chat-messages');if(!box)return false;
+  chatMo=new MutationObserver(list=>{for(const m of list)for(const n of m.addedNodes){if(!(n instanceof Element))continue;const el=n.matches('.chat-message')?n:n.querySelector?.('.chat-message');if(el)emit('chat',{text:el.textContent||'',element:el});}});
+  chatMo.observe(box,{childList:true,subtree:true});return true;};
+ if(!scan()){const t=setInterval(()=>{if(scan())clearInterval(t);},1000);}}
+
+// updates for plugins that came from a link or the catalog
+let catalog=null,catalogAt=0;
+async function getCatalog(force){if(!force&&catalog&&Date.now()-catalogAt<3600e3)return catalog;const data=JSON.parse(await httpGet(CATALOG_URL));
+ catalog=(Array.isArray(data.plugins)?data.plugins:[]).filter(p=>p&&typeof p.id==='string'&&typeof p.url==='string');catalogAt=Date.now();return catalog;}
+async function checkUpdates(apply){let found=0;
+ for(const r of plugins.values()){if(!r.source?.url)continue;try{const code=await httpGet(r.source.url);const meta=parseMeta(code);if(meta.id!==r.id)continue;
+   if(newer(meta.version,r.meta.version)){found++;if(apply)await install(code,r.source);else{r.update={version:meta.version,code};changed();}}}catch(e){console.warn('[Fister Plugins] update check failed for',r.id,e);}}
+ prefs.lastCheck=Date.now();savePrefs();return found;}
+
+// ======================================================================
+// UI: the Plugins tab (and the Ctrl+Shift+P window)
+// ======================================================================
+function toast(text,ms,from){const show=()=>{let box=document.getElementById('fpm-toasts');if(!box){box=document.createElement('div');box.id='fpm-toasts';box.style.cssText='position:fixed;right:12px;top:12px;display:flex;flex-direction:column;gap:6px;z-index:2147483000;pointer-events:none';document.body.append(box);}
+  const t=document.createElement('div');t.className='fpm-toast win95-window';t.setAttribute('role','status');t.style.cssText='padding:8px 12px;max-width:340px;font:13px Tahoma,Arial,sans-serif;background:#c0c0c0;color:#111;border:2px outset #eee';
+  if(from){const b=document.createElement('b');b.textContent=from+': ';t.append(b);}t.append(text);box.append(t);setTimeout(()=>t.remove(),ms);};
+ if(document.body)show();else document.addEventListener('DOMContentLoaded',show,{once:true});}
+const CSS=`
+.fpm{display:flex;flex-direction:column;gap:10px;font-size:13px}
+.fpm .fpm-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.fpm .fpm-card{border:1px solid #808080;padding:8px 10px;background:#ffffff80;display:flex;flex-direction:column;gap:6px}
+.fpm .fpm-card.off{opacity:.7}
+.fpm .fpm-head{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.fpm .fpm-head b{font-size:14px}
+.fpm .fpm-small{font-size:12px;opacity:.8}
+.fpm .fpm-badge{font-size:11px;padding:0 6px;border:1px solid currentColor;border-radius:8px}
+.fpm .fpm-badge.err{color:#b00000}.fpm .fpm-badge.upd{color:#006000}
+.fpm .fpm-grow{flex:1 1 auto}
+.fpm .fpm-toggle{display:inline-flex;gap:6px;align-items:center;margin:0;cursor:pointer}
+.fpm .fpm-toggle input{margin:0}
+.fpm .fpm-form input[type=checkbox]{justify-self:start;width:auto;margin:0}
+.fpm .fpm-form input[type=range]{min-width:140px}
+.fpm .fpm-form{display:grid;grid-template-columns:minmax(120px,max-content) 1fr;gap:6px 10px;align-items:center}
+.fpm .fpm-log{max-height:120px;overflow:auto;font:11px Consolas,monospace;background:#0001;padding:4px;white-space:pre-wrap}
+.fpm .fpm-confirm{border:2px solid #b00000;padding:10px;background:#fff6f6;display:flex;flex-direction:column;gap:6px}
+.fpm input[type=search],.fpm input[type=url]{flex:1 1 220px;min-width:0}
+#fpm-window{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(720px,94vw);max-height:86vh;z-index:100004;display:flex;flex-direction:column}
+#fpm-window .fpm-body{overflow:auto;padding:10px}
+`;
+function css(){if(document.getElementById('fpm-style'))return;const s=document.createElement('style');s.id='fpm-style';s.textContent=CSS;(document.head||document.documentElement).append(s);}
+const h=(tag,props={},...kids)=>{const el=document.createElement(tag);for(const [k,v] of Object.entries(props||{})){if(v==null||v===false)continue;if(k==='class')el.className=v;else if(k.startsWith('on'))el.addEventListener(k.slice(2),v);else if(k in el&&k!=='list')el[k]=v;else el.setAttribute(k,v===true?'':v);}for(const c of kids.flat())if(c!=null&&c!==false)el.append(c);return el;};
+const button=(text,on,extra={})=>h('button',{type:'button',class:'fister-react95-button win95-btn',onclick:on,...extra},text);
+const mounts=new Set();
+function mountManager(host,floating){css();const ui={host,view:'installed',busy:'',query:'',confirm:null,openSettings:new Set(),openLogs:new Set(),message:''};mounts.add(ui);render(ui);
+ const off=()=>{if(!host.isConnected){mounts.delete(ui);listeners.delete(re);}};const re=()=>{off();if(mounts.has(ui))render(ui);};listeners.add(re);return ui;}
+function render(ui){const root=h('div',{class:'fpm'});
+ const say=(t)=>{ui.message=t;render(ui);};
+ const run=async(label,fn)=>{ui.busy=label;render(ui);try{await fn();}catch(e){ui.message=String(e?.message||e);}ui.busy='';render(ui);};
+ const askInstall=(code,source)=>{let meta;try{meta=parseMeta(code);}catch(e){say(String(e.message));return;}ui.confirm={code,source,meta};render(ui);ui.host.scrollTop=0;};
+ // header
+ const bar=h('div',{class:'fpm-row'},
+  button(ui.view==='catalog'?'Installed plugins':'Browse plugins',()=>{ui.view=ui.view==='catalog'?'installed':'catalog';ui.message='';render(ui);if(ui.view==='catalog')run('Loading the catalog…',async()=>{await getCatalog(true);});}),
+  button('Install from link…',()=>{ui.view='link';ui.message='';render(ui);}),
+  button('Install from file…',()=>file.click()),
+  button('Check for updates',()=>run('Checking for updates…',async()=>{const n=await checkUpdates(false);ui.message=n?n+' update'+(n>1?'s':'')+' available.':'Everything is up to date.';})));
+ const file=h('input',{type:'file',accept:'.js,text/javascript',hidden:true,onchange:async()=>{const f=file.files?.[0];if(!f)return;if(f.size>512*1024){say('That file is bigger than 512 KB, which is too big for a plugin.');return;}askInstall(await f.text(),{type:'file',name:f.name});}});
+ root.append(h('fieldset',{},h('legend',{},'Plugins'),bar,file,
+  h('p',{class:'settings-note'},'Plugins are code that runs in the game page: they can do anything the page can, including reading your chat and sending requests as you. Only install plugins from people you trust. Add ?plugins=off to the address to start with every plugin off.'),
+  SAFE?h('p',{class:'settings-note',style:'color:#b00000;font-weight:700'},'Safe mode: plugins are off for this visit (?plugins=off).'):null,
+  game.patched?null:h('p',{class:'settings-note'},W.__fisterRuntimeLoaded&&!game.patched?'Game events are not available: update FisterQoL to 2.3.6 or newer, which passes the plugin hooks to the game.':'Game events become available once the game has loaded.'),
+  game.missed?.length?h('p',{class:'settings-note'},'This game version changed a few spots, so these are missing until the next Plugin Manager update: '+game.missed.join(', ')+'.'):null,
+  ui.busy?h('p',{class:'settings-note',role:'status'},ui.busy):null,ui.message?h('p',{class:'settings-note',role:'status',style:'font-weight:700'},ui.message):null));
+ // confirm install
+ if(ui.confirm){const {meta,source,code}=ui.confirm,old=plugins.get(meta.id);
+  root.append(h('div',{class:'fpm-confirm',role:'alertdialog'},h('b',{},(old?'Update ':'Install ')+meta.name+' '+meta.version+'?'),
+   h('div',{},meta.description||'No description.'),h('div',{class:'fpm-small'},'By '+(meta.author||'unknown')+' · from '+(source.type==='file'?'the file '+(source.name||''):source.type==='catalog'?'the plugin catalog':source.url)),
+   source.type!=='catalog'?h('div',{class:'fpm-small',style:'color:#b00000'},'This plugin is not from the catalog. Only install it if you trust whoever made it.'):null,
+   old?h('div',{class:'fpm-small'},'You have version '+old.meta.version+' installed; it will be replaced.'):null,
+   h('div',{class:'fpm-row'},button(old?'Update':'Install',()=>run('Installing…',async()=>{await install(code,source);ui.confirm=null;ui.message=meta.name+' is installed'+(SAFE?'.':' and on.');})),button('Cancel',()=>{ui.confirm=null;render(ui);}))));}
+ // install from link
+ if(ui.view==='link'){const input=h('input',{type:'url',placeholder:'https://raw.githubusercontent.com/you/repo/main/my-plugin.fister.js',class:'fister-react95-input'});
+  root.append(h('fieldset',{},h('legend',{},'Install from a link'),h('div',{class:'fpm-row'},input,button('Get it',()=>run('Downloading…',async()=>{const url=input.value.trim();const code=await httpGet(url);askInstall(code,{type:'url',url});}))),
+   h('p',{class:'settings-note'},'Use a direct link to the plugin\'s .js file (on GitHub, the "Raw" link). Plugins installed from a link can update themselves from the same address.')));}
+ // catalog
+ if(ui.view==='catalog'){const list=h('div',{class:'fpm'}),search=h('input',{type:'search',placeholder:'Search plugins…',value:ui.query,class:'fister-react95-input',oninput:()=>{ui.query=search.value;fill();}});
+  const fill=()=>{list.replaceChildren();if(!catalog){list.append(h('p',{class:'settings-note'},ui.busy?'Loading…':'Could not load the catalog.'));return;}const q=ui.query.trim().toLowerCase();
+   const items=catalog.filter(p=>!q||[p.name,p.description,p.author,...(p.tags||[])].join(' ').toLowerCase().includes(q));if(!items.length)list.append(h('p',{class:'settings-note'},'No plugins match.'));
+   for(const p of items){const have=plugins.get(p.id),upd=have&&newer(p.version,have.meta.version);
+    list.append(h('div',{class:'fpm-card'},h('div',{class:'fpm-head'},h('b',{},p.name||p.id),h('span',{class:'fpm-small'},'v'+(p.version||'?')+(p.author?' · by '+p.author:'')),have?h('span',{class:'fpm-badge'},upd?'update':'installed'):null),
+     h('div',{},p.description||''),(p.tags||[]).length?h('div',{class:'fpm-small'},p.tags.join(' · ')):null,
+     h('div',{class:'fpm-row'},(!have||upd)?button(upd?'Update':'Install',()=>run('Downloading '+(p.name||p.id)+'…',async()=>{const code=await httpGet(p.url),meta=parseMeta(code);if(meta.id!==p.id)throw Error('The catalog entry and the plugin file disagree about its id.');askInstall(code,{type:'catalog',url:p.url});})):null,
+      p.homepage?h('a',{href:p.homepage,target:'_blank',rel:'noopener'},'More info'):null)));}};
+  fill();root.append(h('fieldset',{},h('legend',{},'Plugin catalog'),h('div',{class:'fpm-row'},search),list,h('p',{class:'settings-note'},'From github.com/jaxonb423/fister-plugins. Want yours listed? Open a pull request there.')));}
+ // installed
+ const recs=[...plugins.values()].sort((a,b)=>a.meta.name.localeCompare(b.meta.name));
+ const inst=h('fieldset',{},h('legend',{},'Installed ('+recs.length+')'));
+ if(!recs.length)inst.append(h('p',{class:'settings-note'},'No plugins yet. Press "Browse plugins" to find some.'));
+ for(const r of recs){const run_=running.get(r.id),err=run_?.error,cb=h('input',{type:'checkbox',checked:r.enabled,id:'fpm-on-'+r.id,onchange:()=>setEnabled(r.id,cb.checked)});
+  const card=h('div',{class:'fpm-card'+(r.enabled?'':' off')},
+   h('div',{class:'fpm-head'},h('label',{class:'fpm-toggle',for:'fpm-on-'+r.id},cb,h('b',{},r.meta.name)),h('span',{class:'fpm-small'},'v'+r.meta.version+(r.meta.author?' · by '+r.meta.author:'')),
+    err?h('span',{class:'fpm-badge err',title:err},'crashed'):null,r.update?h('span',{class:'fpm-badge upd'},'v'+r.update.version+' available'):null),
+   r.meta.description?h('div',{},r.meta.description):null,
+   err?h('div',{class:'fpm-small',style:'color:#b00000'},'Error: '+err):null,
+   h('div',{class:'fpm-small'},'From '+(r.source?.type==='catalog'?'the catalog':r.source?.type==='url'?r.source.url:'a file ('+(r.source?.name||'')+')')),
+   h('div',{class:'fpm-row'},
+    r.update?button('Update to '+r.update.version,()=>run('Updating…',async()=>{await install(r.update.code,r.source);ui.message=r.meta.name+' updated.';})):null,
+    run_&&Object.keys(run_.settingsSchema).length?button(ui.openSettings.has(r.id)?'Hide settings':'Settings',()=>{ui.openSettings.has(r.id)?ui.openSettings.delete(r.id):ui.openSettings.add(r.id);render(ui);}):null,
+    run_?button(ui.openLogs.has(r.id)?'Hide log':'Log',()=>{ui.openLogs.has(r.id)?ui.openLogs.delete(r.id):ui.openLogs.add(r.id);render(ui);}):null,
+    r.enabled&&!SAFE?button('Restart',()=>{stop(r.id);start(r.id);}):null,
+    button('Remove',e=>{if(e.target.dataset.sure==='1'){remove(r.id);}else{e.target.dataset.sure='1';e.target.textContent='Sure? Remove';setTimeout(()=>{if(e.target.isConnected){e.target.dataset.sure='';e.target.textContent='Remove';}},4000);}})));
+  if(run_&&ui.openSettings.has(r.id))card.append(settingsForm(run_));
+  if(run_&&ui.openLogs.has(r.id))card.append(h('div',{class:'fpm-log'},run_.logs.join('\n')||'Nothing logged yet.'));
+  inst.append(card);}
+ const auto=h('input',{type:'checkbox',checked:prefs.autoUpdate,id:'fpm-auto',onchange:()=>{prefs.autoUpdate=auto.checked;savePrefs();}});
+ inst.append(h('label',{class:'settings-checkbox',for:'fpm-auto'},auto,' Update plugins automatically (checks every 6 hours)'));
+ root.append(inst);
+ root.append(h('p',{class:'settings-note fpm-small'},'Fister Plugin Manager '+VERSION+(game.hookedBy?' · game hooks added by '+game.hookedBy:'')+' · Ctrl+Shift+P opens this anywhere.'));
+ const scroll=ui.host.scrollTop;ui.host.replaceChildren(root);ui.host.scrollTop=scroll;}
+function settingsForm(run){const form=h('div',{class:'fpm-form'});
+ for(const [key,d] of Object.entries(run.settingsSchema)){const v=run.api.settings.get(key),id='fpm-s-'+Math.random().toString(36).slice(2,8),label=h('label',{for:id},d.label||key);let input;
+  const set=val=>run.api.settings.set(key,val);
+  if(d.type==='checkbox')input=h('input',{type:'checkbox',id,checked:!!v,onchange:e=>set(e.target.checked)});
+  else if(d.type==='range'){const out=h('span',{},String(v));input=h('span',{class:'fpm-row'},h('input',{type:'range',id,min:d.min??0,max:d.max??100,step:d.step??1,value:v,oninput:e=>{out.textContent=e.target.value;set(Number(e.target.value));}}),out);}
+  else if(d.type==='number')input=h('input',{type:'number',id,min:d.min,max:d.max,step:d.step,value:v,onchange:e=>set(Number(e.target.value))});
+  else if(d.type==='select'){input=h('select',{id,onchange:e=>set(e.target.value)},...(d.options||[]).map(o=>{const [val,lab]=Array.isArray(o)?o:[o,o];return h('option',{value:val,selected:String(val)===String(v)},lab);}));}
+  else if(d.type==='color')input=h('input',{type:'color',id,value:v,oninput:e=>set(e.target.value)});
+  else input=h('input',{type:'text',id,value:v??'',maxLength:d.maxLength||200,onchange:e=>set(e.target.value)});
+  form.append(label,input);if(d.note)form.append(h('span'),h('span',{class:'settings-note fpm-small'},d.note));}
+ return form;}
+function openWindow(){let win=document.getElementById('fpm-window');if(win){win.remove();return;}css();
+ const body=h('div',{class:'fpm-body fister-react95-content'});
+ win=h('div',{id:'fpm-window',class:'fister-react95-window win95-window',role:'dialog','aria-label':'Plugins'},
+  h('div',{class:'fister-react95-title-bar win95-title-bar'},h('div',{class:'fister-react95-title-content'},'Plugins'),h('button',{type:'button',class:'fister-react95-title-button win95-title-btn','aria-label':'Close',onclick:()=>win.remove()},'X')),body);
+ document.body.append(win);mountManager(body,true);}
+addEventListener('keydown',e=>{if(e.ctrlKey&&e.shiftKey&&e.code==='KeyP'){e.preventDefault();e.stopPropagation();openWindow();}if(e.key==='Escape'&&document.getElementById('fpm-window')){document.getElementById('fpm-window').remove();}},true);
+
+// ======================================================================
+// Start
+// ======================================================================
+(async()=>{await loadStore();
+ const go=()=>{watchChat();if(SAFE){changed();return;}for(const r of plugins.values())if(r.enabled)start(r.id);changed();
+  if(prefs.autoUpdate&&Date.now()-prefs.lastCheck>6*3600e3)setTimeout(()=>checkUpdates(true).then(n=>{if(n)toast(n+' plugin'+(n>1?'s were':' was')+' updated. Restart the game to use them everywhere.',6000,'Plugins');}),15000);};
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go,{once:true});else go();})();
+})();

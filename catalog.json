@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "plugins": [
+    {
+      "id": "ko-counter",
+      "name": "KO Counter",
+      "version": "1.0.0",
+      "author": "jaxonb423",
+      "description": "Shows how many KOs you've landed this round (and this session) in a small box on screen.",
+      "tags": [
+        "hud",
+        "stats"
+      ],
+      "url": "https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/ko-counter.fister.js"
+    },
+    {
+      "id": "hit-sounds",
+      "name": "Hit Sounds",
+      "version": "1.0.0",
+      "author": "jaxonb423",
+      "description": "Plays a short sound when you land a hit, parry or KO, so you can hear it even when the screen is busy.",
+      "tags": [
+        "audio",
+        "combat"
+      ],
+      "url": "https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/hit-sounds.fister.js"
+    },
+    {
+      "id": "chat-timestamps",
+      "name": "Chat Timestamps",
+      "version": "1.0.0",
+      "author": "jaxonb423",
+      "description": "Puts the time in front of each new chat message.",
+      "tags": [
+        "chat"
+      ],
+      "url": "https://raw.githubusercontent.com/jaxonb423/fister-plugins/main/plugins/chat-timestamps.fister.js"
+    }
+  ]
+}
