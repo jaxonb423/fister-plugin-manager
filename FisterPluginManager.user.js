@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fister Plugin Manager
 // @namespace    fister-plugins.local
-// @version      1.1.2
+// @version      1.2.0
 // @description  A mod manager for Fister: browse, install, turn on/off, configure and update plugins from its own Plugins tab in Settings. Works on its own or alongside FisterQoL.
 // @match        https://fister.fun/*
 // @match        https://www.fister.fun/*
@@ -25,7 +25,7 @@
 'use strict';
 const W=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
 if(new URL(location.href).pathname!=='/'||W.__fpm)return;
-const VERSION='1.1.2';
+const VERSION='1.2.0';
 const REPO='https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/';
 const CATALOG_URL=REPO+'catalog.json';
 const PARSER={sha256:'8df29c13797bab293a47ce2d334bdb4dd147b6f6a3830f0c7c94efa99e290b8d',url:REPO+'dist/fpm-parser-1.0.0-8df29c1379.json'};
@@ -47,13 +47,13 @@ const addScript=code=>{const host=document.head||document.documentElement;if(typ
 const bus=new Map(),sticky=new Map();
 function emit(name,data){if(name==='ready'||name==='roundStart')sticky.set(name,data);for(const fn of [...(bus.get(name)||[])])try{fn(data);}catch(e){console.warn('[Fister Plugins] listener for',name,'failed:',e);}}
 function listen(name,fn){let set=bus.get(name);if(!set)bus.set(name,set=new Set());set.add(fn);if(sticky.has(name)&&name==='ready')queueMicrotask(()=>{try{fn(sticky.get(name));}catch{}});return()=>set.delete(fn);}
-const game={client:null,scene:null,getters:null,patched:false,hookedBy:null};
+const game={client:null,scene:null,sound:null,getters:null,patched:false,hookedBy:null};
 const localId=()=>{const sc=game.scene;return sc?.localPlayerId??sc?.latestLocalPlayerState?.id??null;};
 const nameOf=id=>{try{return game.scene?.players?.get?.(id)?.username??null;}catch{return null;}};
 const watched=new WeakSet();
 const hook={
  // the network client the game plays combat sounds from
- client(c){if(!c||typeof c!=='object'||watched.has(c))return;watched.add(c);game.client=c;
+ client(c,extra){if(extra&&extra.sound&&typeof extra.sound==='object')game.sound=extra.sound;if(!c||typeof c!=='object'||watched.has(c))return;watched.add(c);game.client=c;emit('client',{client:c,sound:game.sound||null});
   const on=(n,f)=>{try{if(typeof c[n]==='function')c[n](e=>{try{f(e||{});}catch(err){console.warn('[Fister Plugins]',n,err);}});}catch{}};
   on('onKill',e=>{const me=localId(),myName=me!=null?nameOf(me):null;emit('kill',{killerId:e.killerId??null,victimId:e.victimId??null,killer:e.killerUsername??nameOf(e.killerId),victim:e.victimUsername??nameOf(e.victimId),
    byMe:(me!=null&&e.killerId===me)||(!!myName&&e.killerUsername===myName),ofMe:(me!=null&&e.victimId===me)||(!!myName&&e.victimUsername===myName),method:e.method??null,raw:e});});
@@ -76,7 +76,9 @@ function fpmPatch(source){
  // combat events
  try{const i=source.indexOf('.onParrySuccess(');if(i<0)throw Error('combat');const f=source.lastIndexOf('function ',i);
   const m=source.slice(f,i).match(/^function [\w$]+\(([\w$]+),[\w$]+,[\w$]+\)\{/);if(!m||source.slice(i-m[1].length,i)!==m[1])throw Error('combat');
-  source=source.slice(0,f+m[0].length)+'try{window.__fpm.hook.client('+m[1]+');}catch(e){}'+source.slice(f+m[0].length);}catch{missed.push('combat events');}
+  // the game's sound manager is in scope here too (used for "Y.stopSound(...)" before the parry handler)
+  const snd=source.slice(f,i).match(/([\w$]+)\.stopSound\(/);
+  source=source.slice(0,f+m[0].length)+'try{window.__fpm.hook.client('+m[1]+(snd?',{sound:'+snd[1]+'}':'')+');}catch(e){}'+source.slice(f+m[0].length);}catch{missed.push('combat events');}
  // rounds
  const before=source;
  source=source.replace(/onRoundEnd:([\w$]+)=>\{/g,m=>m+'try{window.__fpm.hook.emit("roundEnd");}catch(e){}');
@@ -287,7 +289,8 @@ function stopQuietly(run){for(const f of run.cleanups.splice(0).reverse())try{f(
 function stop(id){const run=running.get(id);if(!run)return;running.delete(id);stopQuietly(run);changed();}
 function makeApi(rec,run){const meta=rec.meta,id=meta.id,track=f=>{run.cleanups.push(f);return f;};
  const settingsKey='fpm-settings:'+id,dataKey='fpm-data:'+id;
- const readSettings=()=>{try{return JSON.parse(localStorage.getItem(settingsKey)||'{}');}catch{return {};}};
+ let settingsCache=null;addEventListener('storage',e=>{if(e.key===settingsKey)settingsCache=null;});
+ const readSettings=()=>{if(settingsCache)return settingsCache;try{settingsCache=JSON.parse(localStorage.getItem(settingsKey)||'{}')||{};}catch{settingsCache={};}return settingsCache;};
  const log=(...a)=>{run.logs.push(new Date().toLocaleTimeString()+' '+a.map(x=>typeof x==='string'?x:(()=>{try{return JSON.stringify(x);}catch{return String(x);}})()).join(' '));if(run.logs.length>50)run.logs.shift();console.log('['+meta.name+']',...a);};
  const settings={
   define(schema){run.settingsSchema={...run.settingsSchema,...(schema||{})};changed();return settings;},
@@ -303,13 +306,13 @@ function makeApi(rec,run){const meta=rec.meta,id=meta.id,track=f=>{run.cleanups.
   onStop(fn){if(typeof fn==='function')track(fn);},
   settings,
   storage:{get(k,d){try{const v=JSON.parse(localStorage.getItem(dataKey)||'{}');return k in v?v[k]:d;}catch{return d;}},set(k,val){let v={};try{v=JSON.parse(localStorage.getItem(dataKey)||'{}');}catch{}v[k]=val;try{localStorage.setItem(dataKey,JSON.stringify(v));}catch{}}},
-  game:Object.freeze({get scene(){return game.scene;},get client(){return game.client;},localPlayerId:localId,playerName:nameOf,
+  game:Object.freeze({get scene(){return game.scene;},get client(){return game.client;},get sound(){return game.sound;},localPlayerId:localId,playerName:nameOf,
    players(){try{return [...(game.scene?.players?.values?.()||[])].map(p=>({id:p.id,name:p.username??null,raw:p}));}catch{return [];}},get hooked(){return game.patched;}}),
   ui:Object.freeze({
    toast(text,ms=3500){toast(String(text),ms,meta.name);},
    style(css){const s=document.createElement('style');s.dataset.fpmPlugin=id;s.textContent=String(css);(document.head||document.documentElement).append(s);track(()=>s.remove());return s;},
    add(el,{interactive=false}={}){if(!(el instanceof Element))throw Error('fister.ui.add needs an element');if(interactive)el.style.pointerEvents='auto';layer().append(el);track(()=>el.remove());return el;},
-   element(tag,props={},...kids){const el=document.createElement(tag);for(const [k,v] of Object.entries(props||{})){if(k==='style'&&typeof v==='object')Object.assign(el.style,v);else if(k.startsWith('on')&&typeof v==='function')el.addEventListener(k.slice(2).toLowerCase(),v);else if(k in el)el[k]=v;else el.setAttribute(k,v);}el.append(...kids);return el;}}),
+   element(tag,props={},...kids){const el=document.createElement(tag);for(const [k,v] of Object.entries(props||{})){if(k==='style'&&typeof v==='object')Object.assign(el.style,v);else if(k.startsWith('on')&&typeof v==='function')el.addEventListener(k.slice(2).toLowerCase(),v);else if(k in el)el[k]=v;else el.setAttribute(k,v);}el.append(...kids.filter(k=>k!=null&&k!==false));return el;}}),
   chat:Object.freeze({onMessage(fn){return track(listen('chat',fn));}}),
   setTimeout(fn,ms){const t=setTimeout(fn,ms);track(()=>clearTimeout(t));return t;},
   setInterval(fn,ms){const t=setInterval(fn,ms);track(()=>clearInterval(t));return t;},

@@ -52,6 +52,7 @@ The code runs with a `fister` object in scope. Everything you add through `fiste
 | `punch` | Someone punches | `{ playerId, victimId, hit, strength, byMe, onMe, raw }` |
 | `roundStart` / `roundEnd` / `matchEnd` | Round and match changes | `{}` |
 | `chat` | A chat message appears | `{ text, element }` |
+| `client` | You joined a match (the game's network client is ready) | `{ client, sound }` |
 
 `raw` is the game's own event object, which can change between game versions.
 
@@ -80,14 +81,14 @@ Types: `checkbox`, `range`, `number`, `select`, `color`, `text`. Add `note: '…
 | `fister.ui.add(element, { interactive })` | Puts an element on screen in a layer above the game (clicks pass through unless `interactive: true`) |
 | `fister.chat.onMessage(fn)` | Same as `fister.on('chat', fn)` |
 | `fister.game.localPlayerId()`, `.playerName(id)`, `.players()` | Who's in the game |
-| `fister.game.scene`, `fister.game.client` | The game's own objects, for advanced use (can change between game versions) |
+| `fister.game.scene`, `fister.game.client`, `fister.game.sound` | The game's own objects (scene, network client, sound manager), for advanced use (can change between game versions) |
 | `fister.storage.get(key, fallback)` / `.set(key, value)` | Saved data for your plugin |
 | `fister.setTimeout`, `fister.setInterval`, `fister.addEventListener(target, type, fn)` | Like the normal ones, cleaned up when the plugin stops |
 | `fister.onStop(fn)` | Runs when the plugin is turned off or updated |
 | `fister.log(...)` | Shows in the plugin's Log in the manager |
 | `fister.meta` | Your plugin's header values |
 
-See [`plugins/`](plugins/) for three small examples: a KO counter, hit sounds and chat timestamps.
+See [`plugins/`](plugins/) for three small examples (a KO counter, hit sounds and chat timestamps) and a bigger one, **Fister Lazy Edition**, which uses most of the API.
 
 ### Sharing it
 
