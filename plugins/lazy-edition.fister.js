@@ -1,12 +1,10 @@
 // ==FisterPlugin==
 // @id          lazy-edition
 // @name        Fister Lazy Edition
-// @version     1.0.0
+// @version     1.0.1
 // @author      jaxonb423
 // @description A pile of small fixes from the community wishlist: parry cooldown ring, kill confirm sound, profanity filter, clearer charge bar, HUD sizes, dailies mid-match, leave warnings and more. Every part has its own switch.
 // @tags        qol hud audio chat
-// @icon        https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/art/lazy-edition-icon.svg
-// @banner      https://raw.githubusercontent.com/jaxonb423/fister-plugin-manager/main/plugins/art/lazy-edition-banner.svg
 // ==/FisterPlugin==
 
 // Everything here only changes what you see and hear on your own screen.
